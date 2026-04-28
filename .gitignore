@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+floor_plan.png
+simulation_result.png
+trajectory.csv
+*.png
+*.csv
