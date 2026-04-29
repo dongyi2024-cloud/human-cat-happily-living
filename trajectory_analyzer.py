@@ -55,8 +55,15 @@ class TrajectoryAnalyzer:
         self._build_grids()
 
     def load_from_csv(self, csv_path: str) -> None:
-        """从已保存的 CSV 文件加载轨迹。"""
-        self.df = pd.read_csv(csv_path)
+        """从已保存的 CSV 文件加载轨迹（自动检测 GBK/UTF-8 编码）。"""
+        for enc in ("utf-8-sig", "gbk", "utf-8"):
+            try:
+                self.df = pd.read_csv(csv_path, encoding=enc)
+                break
+            except (UnicodeDecodeError, LookupError):
+                continue
+        else:
+            raise ValueError(f"无法识别 {csv_path} 的文件编码")
         self._build_grids()
 
     # ------------------------------------------------------------------
