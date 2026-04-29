@@ -1,53 +1,47 @@
-## 1. 现有代码架构总结 (Current Implementation - V9)文件路径：\\wsl.localhost\Ubuntu\home\administrator\miaowu\simulation_v9_standalone
+## 1. 现有代码架构总结 (Current Implementation - V9)
+
+文件路径：项目根目录 /home/administrator/human-cat-happily-living/
+
 *当前代码已完成环境搭建与基础动态模拟，可作为 AI 进一步开发的 Context。*
 *这是基础仿真引擎，需要理解其数据结构。*
 
 ### 1.1 核心类与功能
-- **`FloorPlanParser`**: 户型图解析器。通过 RGB 颜色识别区域（卧室、猫休息区等），生成 `passable_map`（布尔矩阵）。
-- **`CatAgent` / `HumanAgent`**: 智能体类。包含能量系统、基于时间段的决策逻辑（State Machine）和随机行走/寻路算法。
-- **`Simulation`**: 主控类。负责 Tick 步进驱动和基础热力图可视化。
+- **`FloorPlanParser`** (simulation_v9.py): 户型图解析器。通过 RGB 颜色识别区域（卧室、猫休息区等），生成 `passable_map`（布尔矩阵）。
+- **`CatAgent` / `HumanAgent`** (simulation_v9.py): 智能体类。包含能量系统、基于时间段的决策逻辑（State Machine）和随机行走/寻路算法。
+- **`Simulation`** (simulation_v9.py): 主控类。负责 Tick 步进驱动和基础热力图可视化。
 
-### 1.2 待对接数据接口 (Data Ready for Export)
-每个 Tick 产生的核心数据（AI 需利用这些数据进行后续开发）：
+### 1.2 数据接口
+每个 Tick 产生的核心数据：
 - `tick`: 当前时间步
-- `cat_pos (x, y)`, `cat_behavior`: 猫的坐标与行为（如：休息、奔跑、进食）
-- `human_pos (x, y)`, `human_behavior`: 人的坐标与行为（如：工作、睡眠、移动）
+- `cat_pos (x, y)`, `cat_behavior`: 猫的坐标与行为
+- `human_pos (x, y)`, `human_behavior`: 人的坐标与行为
 
-## 2. 待开发模块：多维度空间节点评价 (Backlog & Prompts)
+## 2. 开发完成模块
 
-不要一次写完所有功能。按照 **“模块 A -> 模块 B -> 模块 C -> 模块 D”** 的顺序分步请求。
+### 模块 A：数据持久化与格栅化引擎 ✅
+- 文件: `trajectory_analyzer.py`
+- 类: `TrajectoryAnalyzer`
+- 功能: 轨迹CSV导入导出、200×200格栅化映射、行为频次字典、tick级别共现计数
 
-### 模块 A：数据持久化与格栅化引擎 (Data Grid Engine)
-**任务目标**：将连续的轨迹点转化为 $200 \times 200$ 的离散行为矩阵。
-*   **输入**：模拟运行产生的轨迹列表。
-*   **计算逻辑**：
-    1. **坐标转换**：将连续坐标映射至 `(int(x), int(y))` 格栅索引。
-    2. **行为档案建立**：为每个格栅单元 (Cell) 建立一个计数器，记录该位置发生各类行为的频次。
-*   **AI 任务点**：编写 `TrajectoryAnalyzer` 类，实现轨迹导出 CSV 和栅格化映射。
+### 模块 B：五维评价指标算法 ✅
+- 文件: `metrics_calculator.py`
+- 类: `SpaceMetricsCalculator`
+- 指标: 空间功能强度S、行为熵H、活跃共现密度D_active、全状态共现密度、主导行为Top-3
 
-### 模块 B：五维评价指标算法 (Analysis Metrics)
-**任务目标**：对每个格栅单元进行定量评价。
-*   **指标 1：空间功能强度 ($S$)**：$S = \sum (Count_{behavior} \times Weight_{behavior})$。*参考：奔跑=8，休息=2。*
-*   **指标 2：行为熵 ($H$)**：应用香农熵公式 $H = -\sum p_i \log p_i$，衡量该点功能的杂乱程度。
-*   **指标 3：活跃共现密度 ($D_{active}$)**：**关键技术点**——仅当同一 Tick 内，人猫处于同一格栅，且双方 `behavior` 均非“静止/睡眠”状态时，计数 +1。
-*   **指标 4：全状态共现密度**：记录人猫物理空间重叠的总频率。
-*   **指标 5：主导行为类型**：识别该点频次最高的 Top 3 行为。
+### 模块 C：节点峰值检测与聚类 ✅
+- 文件: `node_detector.py`
+- 类: `NodeDetector`, `SpaceNode`
+- 流程: 百分位阈值过滤 → DBSCAN空间聚类 → 质心计算 → 节点分类（冲突/共享/猫专属/人专属/低利用）
 
-### 模块 C：节点峰值检测与聚类 (Peak Detection & Clustering)
-**任务目标**：将离散的高分格栅聚合成具有设计意义的“空间节点”。
-*   **步骤 1：阈值过滤**：利用 `numpy.percentile` 提取前 20%（强度）或前 10%（共现）的高分格栅。
-*   **步骤 2：空间聚类**：调用 `sklearn.cluster.DBSCAN` 算法。
-    *   `eps`: 建议 5 栅格（约 0.35m）。
-    *   `min_samples`: 建议 3 个点。
-*   **步骤 3：质心计算**：计算每个聚类簇的质心（Centroid），定义为该“空间节点”的坐标。
+### 模块 D：多通道可视化仪表盘 ✅
+- 文件: `dashboard.py`
+- 函数: `generate_dashboard()`
+- 输出: 2×3六通道对比图（猫强度热力图、人强度热力图、行为熵分布图、活跃共现冲突点图、节点分类符号图、设计策略建议表格）
 
-### 模块 D：多通道可视化仪表盘 (Visualization Dashboard)
-**任务目标**：生成类似论文品质的六通道对比图。
-*   **技术要求**：使用 `matplotlib.subplot` 创建 $2 \times 3$ 布局。
-*   **输出通道**：
-    1. 猫空间强度图 (Heatmap)
-    2. 人空间强度图 (Heatmap)
-    3. 行为熵分布图 (Texture/Density map)
-    4. 活跃共现冲突点图
-    5. 节点分类符号图（利用不同形状标记冲突、共享、低利用节点）
-    6. 自动化设计策略建议表格（节点画像卡片）
+## 3. 下一步计划
+
+项目核心功能（模块A/B/C/D）已全部完成。后续可考虑：
+- 参数敏感性分析（不同权重、不同DBSCAN参数对比）
+- 多户型对比实验
+- HTML交互式报告输出
+- CI/CD自动化分析流水线
