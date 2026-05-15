@@ -15,6 +15,12 @@ BEHAVIOR_WEIGHTS = {
     "游走": 4.0,
     "移动": 4.0,
     "闲逛": 3.0,
+    "居家工作": 3.5,
+    "外出": 0.0,
+    "家务": 3.0,
+    "照护": 3.0,
+    "休闲": 2.0,
+    "学习": 3.0,
     "观望": 2.0,
     "躲藏": 2.0,
     "休息": 2.0,
@@ -26,7 +32,7 @@ BEHAVIOR_WEIGHTS = {
 }
 
 # 静止/睡眠行为集合（用于活跃共现判断）
-PASSIVE_BEHAVIORS = {"休息", "睡眠", "躲藏"}
+PASSIVE_BEHAVIORS = {"休息", "睡眠", "躲藏", "外出", "休闲"}
 
 
 class TrajectoryAnalyzer:
@@ -102,7 +108,12 @@ class TrajectoryAnalyzer:
 
         for row in self.df.itertuples(index=False):
             cgy, cgx = self._to_grid(row.cat_x, row.cat_y)
-            hgy, hgx = self._to_grid(row.human_x, row.human_y)
+            human_state = getattr(row, "human_state", "")
+            human_outside = (
+                human_state == "outside"
+                or pd.isna(row.human_x)
+                or pd.isna(row.human_y)
+            )
 
             # 猫行为频次
             key = (cgy, cgx)
@@ -111,7 +122,12 @@ class TrajectoryAnalyzer:
             beh = row.cat_behavior
             self.cat_behavior_grid[key][beh] = self.cat_behavior_grid[key].get(beh, 0) + 1
 
-            # 人行为频次
+            if human_outside:
+                continue
+
+            hgy, hgx = self._to_grid(row.human_x, row.human_y)
+
+            # 人行为频次：outside tick 不写入室内格栅，避免伪造室内位置。
             key = (hgy, hgx)
             if key not in self.human_behavior_grid:
                 self.human_behavior_grid[key] = {}

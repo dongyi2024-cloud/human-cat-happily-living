@@ -1,0 +1,2 @@
+dataset,table,category,sleep_hours,household_hours,care_hours,working_hours,education_hours,leisure_hours,source_url,source_note
+ATUS_2024,Table 8B,employed_adults_baseline,8.59,1.81,1.36,5.01,0.21,3.47,https://www.bls.gov/news.release/atus.t08b.htm,"Employed civilian population 18 years and over; major activity categories include related travel"

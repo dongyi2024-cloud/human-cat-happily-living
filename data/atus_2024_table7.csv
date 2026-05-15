@@ -1,0 +1,4 @@
+dataset,table,category,total_employed_thousands,worked_avg_day_percent,work_hours_avg_day,workplace_share,workplace_hours,home_work_share,home_work_hours,source_url,source_note
+ATUS_2024,Table 7,"Management, business, and financial operations",31374,70.7,7.67,0.605,7.71,0.481,5.79,https://www.bls.gov/news.release/atus.t07.htm,"Working at home includes any time persons did work at home; persons may work at more than one location"
+ATUS_2024,Table 7,"Professional and related",48324,65.7,7.39,0.605,7.94,0.465,4.98,https://www.bls.gov/news.release/atus.t07.htm,"Working at home includes any time persons did work at home; persons may work at more than one location"
+ATUS_2024,Table 7,"Service",28485,55.2,7.11,0.872,7.22,0.105,4.41,https://www.bls.gov/news.release/atus.t07.htm,"Working at home includes any time persons did work at home; persons may work at more than one location"

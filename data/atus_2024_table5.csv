@@ -1,0 +1,4 @@
+dataset,table,category,total_employed_thousands,worked_avg_day_percent,work_hours_avg_day,source_url,source_note
+ATUS_2024,Table 5,"Management, business, and financial operations",31374,70.7,7.67,https://www.bls.gov/news.release/atus.t05.htm,"2024 annual averages; occupation main job only"
+ATUS_2024,Table 5,"Professional and related",48324,65.7,7.39,https://www.bls.gov/news.release/atus.t05.htm,"2024 annual averages; occupation main job only"
+ATUS_2024,Table 5,"Service",28485,55.2,7.11,https://www.bls.gov/news.release/atus.t05.htm,"2024 annual averages; occupation main job only"

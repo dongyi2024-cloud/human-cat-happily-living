@@ -1,0 +1,2 @@
+dataset,table,category,personal_care_hours,paid_work_hours,unpaid_work_hours,discretionary_hours,education_hours,travel_hours,source_url,source_note
+China_Time_Use_2018,2018全国时间利用调查公报,overall_residents,11.8833,4.4,2.7,3.9333,0.45,0.6333,https://www.stats.gov.cn/sj/zxfb/202302/t20230203_1900224.html,"居民24小时活动构成；个人生理必需活动包含睡觉休息、个人卫生护理和饮食"

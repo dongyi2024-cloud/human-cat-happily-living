@@ -1,0 +1,38 @@
+{
+  "remote_worker": {
+    "display_name": "居家办公者",
+    "country": "US",
+    "source_dataset": "ATUS_2024",
+    "source_tables": ["Table 5", "Table 7", "Table 8B"],
+    "raw_files": ["atus_2024_table5.csv", "atus_2024_table7.csv", "atus_2024_table8b.csv"],
+    "occupation_categories": [
+      "Management, business, and financial operations",
+      "Professional and related"
+    ],
+    "baseline_category": "employed_adults_baseline",
+    "profile_status": "data_supported",
+    "paper_ready": true
+  },
+  "service_worker": {
+    "display_name": "服务业工作者",
+    "country": "US",
+    "source_dataset": "ATUS_2024",
+    "source_tables": ["Table 5", "Table 7", "Table 8B"],
+    "raw_files": ["atus_2024_table5.csv", "atus_2024_table7.csv", "atus_2024_table8b.csv"],
+    "occupation_categories": ["Service"],
+    "baseline_category": "employed_adults_baseline",
+    "profile_status": "data_supported",
+    "paper_ready": true
+  },
+  "default_china": {
+    "display_name": "中国居民基准画像",
+    "country": "CN",
+    "source_dataset": "China_Time_Use_2018",
+    "source_tables": ["2018 China Time Use Survey Bulletin"],
+    "raw_files": ["china_time_use_2018.csv"],
+    "occupation_categories": ["overall_residents"],
+    "baseline_category": "overall_residents",
+    "profile_status": "data_supported",
+    "paper_ready": true
+  }
+}

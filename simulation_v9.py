@@ -20,6 +20,8 @@ import json
 import os
 from copy import deepcopy
 
+from time_use_parameter_builder import TimeUseParameterBuilder
+
 # ===================== 中文字体支持 =====================
 plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS', 'DejaVu Sans']
 plt.rcParams['axes.unicode_minus'] = False
@@ -775,8 +777,21 @@ class CatAgent:
 
 
 # ===================== 人类智能体 =====================
+HUMAN_BEHAVIOR_LABELS = {
+    "sleep": "睡眠",
+    "home_work": "居家工作",
+    "outside": "外出",
+    "household": "家务",
+    "care": "照护",
+    "leisure": "休闲",
+    "education": "学习",
+    "move": "移动",
+    "wander": "闲逛",
+}
+
+
 class HumanAgent:
-    def __init__(self, start_x, start_y, zone_map, passable_map, scale_x, scale_y, total_ticks=5000):
+    def __init__(self, start_x, start_y, zone_map, passable_map, scale_x, scale_y, total_ticks=1440, human_profile=None):
         self.zone_map, self.passable_map = zone_map, passable_map
         self.scale_x, self.scale_y = scale_x, scale_y
         self.h, self.w = zone_map.shape
@@ -790,9 +805,20 @@ class HumanAgent:
         self.path_finder = PathFinder(passable_map)
         self.path, self.path_index = [], 0
         self.state = "moving"
+        self.human_profile = human_profile or TimeUseParameterBuilder(total_ticks=total_ticks).build_profile("default_china", country="CN")
+        self.activity_schedule = self.human_profile["activity_schedule"]
+        self.current_activity_index = -1
+        self.current_activity = None
+        self.current_activity_remaining = 0
+        self.current_zone = str(self.zone_map[int(self.y), int(self.x)])
+        self.target_zone = self.current_zone
         self.wander_steps = 0
         self.wander_target_x = self.wander_target_y = None
-        self.choose_new_goal()
+        self.zone_stay_ticks = {}
+        self.activity_ticks = {}
+        self.behavior_counts = {}
+        self.outside_ticks = 0
+        self._advance_activity_if_needed(force=True)
 
     def _add_heatmap(self, y, x, weight):
         if 0 <= y < self.h and 0 <= x < self.w: self.visit_count[y, x] += weight
@@ -803,44 +829,81 @@ class HumanAgent:
                 if 0 <= ny < self.h and 0 <= nx < self.w:
                     self.visit_count[ny, nx] += weight * (0.4 / (1 + np.sqrt(dy*dy+dx*dx)))
 
-    def _get_activity_pattern(self):
-        p = self.current_tick / self.total_ticks
-        return (HUMAN_CONFIG["activity_patterns"]["morning"] if p < 0.3 else
-                HUMAN_CONFIG["activity_patterns"]["daytime"] if p < 0.7 else
-                HUMAN_CONFIG["activity_patterns"]["evening"])
+    def _get_current_activity(self):
+        return self.current_activity or "leisure"
 
-    def choose_new_goal(self):
-        pattern = self._get_activity_pattern()
-        zones = pattern["zones"].copy()
-        random.shuffle(zones)
-        for tz in zones:
-            zc = np.where(self.zone_map == tz)
-            if len(zc[0]) > 5:
-                cy, cx = np.mean(zc[0]), np.mean(zc[1])
-                best_idx, best_dist = None, float('inf')
-                for _ in range(min(50, len(zc[0]))):
-                    idx = random.randint(0, len(zc[0])-1)
-                    py, px = zc[0][idx], zc[1][idx]
-                    d = (py-cy)**2 + (px-cx)**2
-                    if d < best_dist: best_dist, best_idx = d, idx
-                if best_idx is not None:
-                    gx, gy = float(zc[1][best_idx]), float(zc[0][best_idx])
-                else:
-                    idx = random.randint(0, len(zc[0])-1)
-                    gx, gy = float(zc[1][idx]), float(zc[0][idx])
-                self.path = self.path_finder.find_path(self.x, self.y, gx, gy, use_internal=HUMAN_CONFIG["use_internal_path"])
-                self.path_index = 0
-                if len(self.path) > 0: self.state = "moving"; return
+    def _advance_activity_if_needed(self, force=False):
+        if not force and self.current_activity_remaining > 0:
+            return
+        if not self.activity_schedule:
+            self.current_activity = "leisure"
+            self.current_activity_remaining = self.total_ticks
+        else:
+            self.current_activity_index = (self.current_activity_index + 1) % len(self.activity_schedule)
+            item = self.activity_schedule[self.current_activity_index]
+            self.current_activity = item["activity"]
+            self.current_activity_remaining = int(item["duration"])
+        self._start_activity(self.current_activity)
+
+    def _start_activity(self, activity):
+        if activity == "outside":
+            self._start_outside()
+            return
+        self.state = "moving"
+        self.target_zone = self._select_zone_for_activity(activity)
+        self.choose_new_goal(self.target_zone)
+
+    def _select_zone_for_activity(self, activity):
+        mapping = self.human_profile.get("assumptions", {}).get("activity_to_zone_weights")
+        if mapping is None:
+            # Profile JSON keeps only the mapping version; import-time builder metadata is the authoritative export.
+            from time_use_parameter_builder import ACTIVITY_TO_ZONE_MAP
+            mapping = ACTIVITY_TO_ZONE_MAP
+        zone_weights = mapping.get(activity, {"shared": 1.0})
+        return weighted_random_choice(zone_weights)
+
+    def _start_outside(self):
+        self.state = "outside"
+        self.current_zone = "outside"
+        self.target_zone = "outside"
+        self.path = []
+        self.path_index = 0
+
+    def choose_new_goal(self, target_zone=None):
+        tz = target_zone or self.target_zone
+        if tz == "outside":
+            self._start_outside()
+            return
+        zc = np.where(self.zone_map == tz)
+        if len(zc[0]) > 5:
+            cy, cx = np.mean(zc[0]), np.mean(zc[1])
+            best_idx, best_dist = None, float('inf')
+            for _ in range(min(50, len(zc[0]))):
+                idx = random.randint(0, len(zc[0])-1)
+                py, px = zc[0][idx], zc[1][idx]
+                d = (py-cy)**2 + (px-cx)**2
+                if d < best_dist: best_dist, best_idx = d, idx
+            idx = best_idx if best_idx is not None else random.randint(0, len(zc[0])-1)
+            gx, gy = float(zc[1][idx]), float(zc[0][idx])
+            self.path = self.path_finder.find_path(self.x, self.y, gx, gy, use_internal=HUMAN_CONFIG["use_internal_path"])
+            self.path_index = 0
+            if len(self.path) > 0:
+                self.state = "moving"
+                return
+
         coords = np.where(self.passable_map)
         if len(coords[0]) > 0:
             idx = random.randint(0, len(coords[0])-1)
             self.path = self.path_finder.find_path(self.x, self.y, float(coords[1][idx]), float(coords[0][idx]))
-            self.path_index = 0; self.state = "moving"
+            self.path_index = 0
+            self.state = "moving"
 
     def _start_wandering(self):
+        if self.state == "outside":
+            return
         self.state = "wandering"
         mn, mx = HUMAN_CONFIG["random_walk_steps"]
-        self.wander_steps = random.randint(mn, mx)
+        self.wander_steps = min(random.randint(mn, mx), max(5, self.current_activity_remaining))
         cz = self.zone_map[int(self.y), int(self.x)]
         zc = np.where(self.zone_map == cz)
         if len(zc[0]) > 0:
@@ -851,7 +914,10 @@ class HumanAgent:
             self.wander_target_y = self.y + random.randint(-30, 30)
 
     def _wander_move(self):
-        if self.wander_steps <= 0: self.state = "moving"; self.choose_new_goal(); return
+        if self.wander_steps <= 0:
+            self.state = "moving"
+            self.choose_new_goal(self._select_zone_for_activity(self._get_current_activity()))
+            return
         self.wander_steps -= 1
         dx, dy = self.wander_target_x - self.x, self.wander_target_y - self.y
         if np.sqrt(dx*dx+dy*dy) < 5.0:
@@ -870,31 +936,39 @@ class HumanAgent:
         ny = np.clip(self.y + np.sin(self.angle)*sp, 1, self.h-2)
         if self.passable_map[int(ny), int(nx)]: self.x, self.y = nx, ny
         else: self._start_wandering()
-        self.trajectory.append((self.x, self.y))
-        self._add_heatmap(int(self.y), int(self.x), HUMAN_CONFIG["heatmap_weight"])
+        self._record_indoor_position()
 
-    def move(self):
-        self.current_tick += 1
-        if self.state == "wandering": self._wander_move(); return
+    def _move_indoor(self):
         if len(self.path) == 0 or self.path_index >= len(self.path):
-            self.update_state_at_goal(); self._start_wandering(); return
+            self.update_state_at_goal()
+            self._start_wandering()
+            return
         nx, ny = self.path[self.path_index]
         dx, dy = nx - self.x, ny - self.y
         dist = np.sqrt(dx*dx + dy*dy)
         if dist < 2.0:
             self.path_index += 1
-            if self.path_index >= len(self.path): self.update_state_at_goal(); self._start_wandering()
+            if self.path_index >= len(self.path):
+                self.update_state_at_goal()
+                self._start_wandering()
             return
         ta = np.arctan2(dy, dx)
         ad = (ta - self.angle + np.pi) % (2*np.pi) - np.pi
         mt = np.radians(HUMAN_CONFIG["max_turn_angle"])
         self.angle += np.sign(ad) * min(abs(ad), mt) if abs(ad) > mt else ad
         sp = HUMAN_CONFIG["step_length_m"] / self.scale_x
-        if dist < sp: nx, ny = nx, ny
-        else: nx = self.x + np.cos(self.angle)*sp; ny = self.y + np.sin(self.angle)*sp
+        if dist >= sp:
+            nx = self.x + np.cos(self.angle)*sp
+            ny = self.y + np.sin(self.angle)*sp
         nx = np.clip(nx, 1, self.w-2); ny = np.clip(ny, 1, self.h-2)
-        if self.passable_map[int(ny), int(nx)]: self.x, self.y = nx, ny
-        else: self.choose_new_goal()
+        if self.passable_map[int(ny), int(nx)]:
+            self.x, self.y = nx, ny
+        else:
+            self.choose_new_goal(self.target_zone)
+        self._record_indoor_position()
+
+    def _record_indoor_position(self):
+        self.current_zone = str(self.zone_map[int(self.y), int(self.x)])
         self.trajectory.append((self.x, self.y))
         self._add_heatmap(int(self.y), int(self.x), HUMAN_CONFIG["heatmap_weight"])
 
@@ -905,23 +979,78 @@ class HumanAgent:
         elif cz == "shared":      self.satisfaction = min(1.0, self.satisfaction + 0.03)
         elif cz == "window":      self.satisfaction = min(1.0, self.satisfaction + 0.02)
 
-    def get_behavior(self):
-        cz = self.zone_map[int(self.y), int(self.x)]
-        if cz == "human_sleep":
-            return "睡眠"
-        if cz == "human_work":
-            return "工作"
-        if self.state == "wandering":
-            return "闲逛"
-        return "移动"
+    def _outside_step(self):
+        self.current_zone = "outside"
 
-    def step(self): self.move()
+    def move(self):
+        self._advance_activity_if_needed()
+        if self.state == "outside":
+            self._outside_step()
+        elif self.state == "wandering":
+            self._wander_move()
+        else:
+            self._move_indoor()
+
+    def get_behavior(self):
+        if self.state == "outside":
+            return HUMAN_BEHAVIOR_LABELS["outside"]
+        return HUMAN_BEHAVIOR_LABELS.get(self._get_current_activity(), HUMAN_BEHAVIOR_LABELS["move"])
+
+    def get_record_x(self):
+        return None if self.state == "outside" else self.x
+
+    def get_record_y(self):
+        return None if self.state == "outside" else self.y
+
+    def _record_statistics(self):
+        zone = self.current_zone if self.state == "outside" else str(self.zone_map[int(self.y), int(self.x)])
+        activity = self._get_current_activity()
+        behavior = self.get_behavior()
+        self.zone_stay_ticks[zone] = self.zone_stay_ticks.get(zone, 0) + 1
+        self.activity_ticks[activity] = self.activity_ticks.get(activity, 0) + 1
+        self.behavior_counts[behavior] = self.behavior_counts.get(behavior, 0) + 1
+        if self.state == "outside":
+            self.outside_ticks += 1
+
+    def get_behavior_summary(self):
+        return {
+            "profile_id": self.human_profile["profile_id"],
+            "display_name": self.human_profile["display_name"],
+            "total_ticks": int(sum(self.activity_ticks.values())),
+            "human_zone_stay_ticks": dict(sorted(self.zone_stay_ticks.items())),
+            "human_activity_ticks": dict(sorted(self.activity_ticks.items())),
+            "behavior_counts": dict(sorted(self.behavior_counts.items())),
+            "outside_ticks": self.outside_ticks,
+            "final_state": {
+                "human_state": self.state,
+                "human_zone": self.current_zone,
+                "current_activity": self._get_current_activity(),
+                "satisfaction": round(float(self.satisfaction), 4),
+            },
+            "human_profile_summary": {
+                "profile_id": self.human_profile["profile_id"],
+                "display_name": self.human_profile["display_name"],
+                "source_dataset": self.human_profile["source"]["dataset"],
+                "source_tables": self.human_profile["source"]["tables"],
+                "occupation_categories": self.human_profile["source"]["occupation_categories"],
+                "tick_minutes": self.human_profile["assumptions"]["tick_minutes"],
+                "normalization_applied": self.human_profile["assumptions"]["normalization_applied"],
+            },
+        }
+
+    def step(self):
+        self.move()
+        self._record_statistics()
+        self.current_activity_remaining -= 1
+        self.current_tick += 1
 
 
 # ===================== 模拟主控 =====================
 class Simulation:
     def __init__(self, floor_plan_path, total_ticks=5000, cat_profile=None, random_seed=None,
-                 output_dir="outputs", auto_export=False):
+                 output_dir="outputs", auto_export=False, human_profile_id="default_china",
+                 country="CN", day_type="average_day", tick_minutes=1.0,
+                 data_dir="data", human_mapping_path="config/human_profile_mapping.json"):
         if random_seed is not None:
             random.seed(random_seed)
             np.random.seed(random_seed)
@@ -929,6 +1058,21 @@ class Simulation:
         self.random_seed = random_seed
         self.output_dir = output_dir
         self.auto_export = auto_export
+        self.tick_minutes = tick_minutes
+        self.human_profile_id = human_profile_id
+        self.country = country
+        self.day_type = day_type
+        self.human_profile_builder = TimeUseParameterBuilder(
+            data_dir=data_dir,
+            mapping_path=human_mapping_path,
+            tick_minutes=tick_minutes,
+            total_ticks=total_ticks,
+        )
+        self.human_profile = self.human_profile_builder.build_profile(
+            human_profile_id,
+            country=country,
+            day_type=day_type,
+        )
         parser = FloorPlanParser(floor_plan_path)
         self.img, self.zone_map, self.passable_maps, self.zone_stats, self.scale_x, self.scale_y = parser.parse()
 
@@ -940,7 +1084,13 @@ class Simulation:
         hp = np.where(self.passable_maps["human"])
         if len(hp[0]) == 0: raise ValueError("没有人类可通行的区域")
         idx = random.randint(0, len(hp[0])-1)
-        self.human = HumanAgent(hp[1][idx], hp[0][idx], self.zone_map, self.passable_maps["human"], self.scale_x, self.scale_y, total_ticks)
+        self.human = HumanAgent(
+            hp[1][idx], hp[0][idx],
+            self.zone_map, self.passable_maps["human"],
+            self.scale_x, self.scale_y,
+            total_ticks,
+            human_profile=self.human_profile,
+        )
 
     def run(self):
         print(f"\n[模拟] 开始运行 ({self.total_ticks} 步)...")
@@ -959,9 +1109,13 @@ class Simulation:
                 "cat_stress": self.cat.state["stress"],
                 "cat_hunger": self.cat.state["hunger"],
                 "cat_boredom": self.cat.state["boredom"],
-                "human_x": self.human.x,
-                "human_y": self.human.y,
+                "human_x": self.human.get_record_x(),
+                "human_y": self.human.get_record_y(),
+                "human_zone": self.human.current_zone,
+                "human_activity": self.human._get_current_activity(),
                 "human_behavior": self.human.get_behavior(),
+                "human_state": self.human.state,
+                "human_profile_id": self.human.human_profile["profile_id"],
             })
         print("[模拟] 运行完成!")
         if self.auto_export:
@@ -976,7 +1130,8 @@ class Simulation:
         fields = [
             "tick", "cat_x", "cat_y", "cat_zone", "cat_behavior",
             "cat_energy", "cat_stress", "cat_hunger", "cat_boredom",
-            "human_x", "human_y", "human_behavior",
+            "human_x", "human_y", "human_zone", "human_activity",
+            "human_behavior", "human_state", "human_profile_id",
         ]
         with open(csv_path, "w", newline="", encoding="utf-8-sig") as f:
             writer = csv.DictWriter(f, fieldnames=fields)
@@ -1005,6 +1160,46 @@ class Simulation:
         print(f"[输出] 猫档案已保存: {json_path}")
         return json_path
 
+    def export_human_behavior_summary(self, json_path=None):
+        if json_path is None:
+            json_path = os.path.join(self.output_dir, "human_behavior_summary.json")
+        os.makedirs(os.path.dirname(json_path) or ".", exist_ok=True)
+        summary = self.human.get_behavior_summary()
+        summary["random_seed"] = self.random_seed
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(summary, f, ensure_ascii=False, indent=2)
+        print(f"[输出] 人类行为摘要已保存: {json_path}")
+        return json_path
+
+    def export_human_profile_used(self, json_path=None):
+        if json_path is None:
+            json_path = os.path.join(self.output_dir, "human_profile_used.json")
+        os.makedirs(os.path.dirname(json_path) or ".", exist_ok=True)
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(self.human_profile, f, ensure_ascii=False, indent=2)
+        print(f"[输出] 人类画像已保存: {json_path}")
+        return json_path
+
+    def export_source_metadata(self, json_path=None):
+        if json_path is None:
+            json_path = os.path.join(self.output_dir, "source_metadata.json")
+        os.makedirs(os.path.dirname(json_path) or ".", exist_ok=True)
+        metadata = self.human_profile_builder.last_source_metadata or {}
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(metadata, f, ensure_ascii=False, indent=2)
+        print(f"[输出] 来源元数据已保存: {json_path}")
+        return json_path
+
+    def export_activity_to_zone_mapping_used(self, json_path=None):
+        if json_path is None:
+            json_path = os.path.join(self.output_dir, "activity_to_zone_mapping_used.json")
+        os.makedirs(os.path.dirname(json_path) or ".", exist_ok=True)
+        metadata = self.human_profile_builder.get_activity_to_zone_mapping_metadata()
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(metadata, f, ensure_ascii=False, indent=2)
+        print(f"[输出] 活动-区域映射已保存: {json_path}")
+        return json_path
+
     def export_outputs(self, output_dir=None):
         if output_dir is not None:
             self.output_dir = output_dir
@@ -1013,6 +1208,10 @@ class Simulation:
             "tick_records": self.export_tick_records_csv(),
             "cat_behavior_summary": self.export_cat_behavior_summary(),
             "cat_profile_used": self.export_cat_profile_used(),
+            "human_behavior_summary": self.export_human_behavior_summary(),
+            "human_profile_used": self.export_human_profile_used(),
+            "source_metadata": self.export_source_metadata(),
+            "activity_to_zone_mapping_used": self.export_activity_to_zone_mapping_used(),
         }
 
     def visualize(self, save_path=None):
@@ -1056,15 +1255,16 @@ class Simulation:
 
         # 4. 报告
         ax = axes[1, 1]; ax.axis("off")
-        phase = ("Morning" if self.total_ticks/5000 < 0.3 else
-                 "Daytime" if self.total_ticks/5000 < 0.7 else "Evening")
         score = self.cat.satisfaction*0.4 + self.human.satisfaction*0.4 + 0.2
         status = "Good layout" if self.cat.satisfaction > 0.5 and self.human.satisfaction > 0.5 else "Needs optimization"
+        human_source = self.human_profile["source"]
+        human_budget = self.human_profile["derived_activity_budget"]
         report = f"""Simulation Report ({self.total_ticks} Steps)
 {'='*50}
 
 Parameters:
 - Total Steps: {self.total_ticks}
+- Tick Scale: {self.tick_minutes:g} min/tick
 - Cat Profile: {self.cat.cat_profile['name']}
 - Age Stage: {self.cat.objective['age_stage']}
 - Cat Energy: {self.cat.energy:.2f}
@@ -1073,15 +1273,25 @@ Parameters:
 - Cat Hunger: {self.cat.state['hunger']:.2f}
 - Cat Boredom: {self.cat.state['boredom']:.2f}
 - Human Satisfaction: {self.human.satisfaction:.2f}
+- Human Profile: {self.human_profile['profile_id']}
+- Source Dataset: {human_source['dataset']}
+- Source Tables: {', '.join(human_source['tables'])}
 
-Activity Phase: {phase}
+Human Activity Budget (ticks):
+- Sleep: {human_budget.get('sleep', 0)}
+- Home Work: {human_budget.get('home_work', 0)}
+- Outside: {human_budget.get('outside', 0)}
+- Household: {human_budget.get('household', 0)}
+- Leisure: {human_budget.get('leisure', 0)}
+
+Note: Activity-to-zone mapping is model-defined.
 Overall Score: {score:.2f}
 
 Status:
 {status}
 """
         ax.text(0.1, 0.5, report, fontsize=13, verticalalignment="center",
-                fontfamily="monospace", bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.6))
+                fontfamily="sans-serif", bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.6))
 
         plt.tight_layout()
         if save_path:

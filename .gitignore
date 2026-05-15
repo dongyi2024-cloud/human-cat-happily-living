@@ -5,5 +5,7 @@ simulation_result.png
 trajectory.csv
 *.png
 *.csv
+!data/
+!data/*.csv
 result/
 outputs/
