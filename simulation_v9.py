@@ -15,6 +15,10 @@ from PIL import Image
 from scipy.ndimage import gaussian_filter
 from heapq import heappush, heappop
 import random
+import csv
+import json
+import os
+from copy import deepcopy
 
 # ===================== 中文字体支持 =====================
 plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS', 'DejaVu Sans']
@@ -43,6 +47,59 @@ def create_rainbow_colormap():
 
 RAINBOW_CMAP = create_rainbow_colormap()
 
+
+def clamp(value, min_value=0.0, max_value=1.0):
+    return max(min_value, min(max_value, value))
+
+
+def weighted_random_choice(weights):
+    valid_items = [(key, max(0.0, float(weight))) for key, weight in weights.items()]
+    total = sum(weight for _, weight in valid_items)
+    if total <= 0:
+        return random.choice(list(weights.keys()))
+    pick = random.uniform(0, total)
+    current = 0.0
+    for key, weight in valid_items:
+        current += weight
+        if pick <= current:
+            return key
+    return valid_items[-1][0]
+
+
+def normalize_cat_profile(cat_profile=None):
+    profile = deepcopy(DEFAULT_CAT_PROFILE)
+    if cat_profile:
+        profile["name"] = cat_profile.get("name", profile["name"])
+        for section in ("objective", "personality"):
+            profile[section].update(cat_profile.get(section, {}))
+
+    objective = profile["objective"]
+    personality = profile["personality"]
+    if objective.get("age_stage") not in {"kitten", "young", "adult", "senior"}:
+        objective["age_stage"] = "adult"
+    if objective.get("sex") not in {"male", "female", "unknown"}:
+        objective["sex"] = "unknown"
+    if objective.get("body_condition") not in {"thin", "normal", "overweight", "obese"}:
+        objective["body_condition"] = "normal"
+    for key in ("mobility_level", "vision_level", "hearing_level"):
+        objective[key] = clamp(float(objective.get(key, 1.0)), 0.2, 1.2)
+    if objective.get("neutered") not in {True, False, None}:
+        objective["neutered"] = True
+    diseases = objective.get("disease_history", [])
+    if diseases is None:
+        diseases = []
+    if isinstance(diseases, str):
+        diseases = [] if diseases == "none" else [diseases]
+    objective["disease_history"] = [d for d in diseases if d and d != "none"]
+
+    for key in DEFAULT_CAT_PROFILE["personality"]:
+        personality[key] = clamp(float(personality.get(key, 0.5)))
+    return profile
+
+
+def get_cat_preset_profiles():
+    return {name: normalize_cat_profile(profile) for name, profile in CAT_PRESET_PROFILES.items()}
+
 # ===================== 智能体配置参数 =====================
 CAT_CONFIG = {
     "initial_energy": 1.0,
@@ -57,6 +114,92 @@ CAT_CONFIG = {
     "jump_distance_multiplier": 2.5,
     "heatmap_weight": 5.0,
     "run_heatmap_weight": 8.0,
+}
+
+CAT_BEHAVIOR_LABELS = {
+    "rest": "休息",
+    "feed": "进食",
+    "explore": "探索",
+    "watch_window": "观望",
+    "hide": "躲藏",
+    "run": "奔跑",
+    "wander": "游走",
+    "claim_spot": "占位",
+    "approach_human": "亲近",
+}
+
+DEFAULT_CAT_PROFILE = {
+    "name": "default_adult",
+    "objective": {
+        "age_stage": "adult",
+        "sex": "unknown",
+        "neutered": True,
+        "body_condition": "normal",
+        "mobility_level": 1.0,
+        "vision_level": 1.0,
+        "hearing_level": 1.0,
+        "disease_history": [],
+    },
+    "personality": {
+        "neuroticism": 0.50,
+        "extraversion": 0.50,
+        "dominance": 0.50,
+        "impulsiveness": 0.50,
+        "agreeableness": 0.50,
+    },
+}
+
+CAT_PRESET_PROFILES = {
+    "sensitive_hiding": {
+        "name": "sensitive_hiding",
+        "objective": {"age_stage": "adult", "neutered": True, "mobility_level": 0.95},
+        "personality": {
+            "neuroticism": 0.88,
+            "extraversion": 0.25,
+            "dominance": 0.35,
+            "impulsiveness": 0.35,
+            "agreeableness": 0.25,
+        },
+    },
+    "curious_active": {
+        "name": "curious_active",
+        "objective": {"age_stage": "young", "neutered": True, "mobility_level": 1.0},
+        "personality": {
+            "neuroticism": 0.25,
+            "extraversion": 0.90,
+            "dominance": 0.45,
+            "impulsiveness": 0.82,
+            "agreeableness": 0.55,
+        },
+    },
+    "friendly_companion": {
+        "name": "friendly_companion",
+        "objective": {"age_stage": "adult", "neutered": True, "mobility_level": 1.0},
+        "personality": {
+            "neuroticism": 0.22,
+            "extraversion": 0.60,
+            "dominance": 0.30,
+            "impulsiveness": 0.35,
+            "agreeableness": 0.90,
+        },
+    },
+    "senior_arthritis": {
+        "name": "senior_arthritis",
+        "objective": {
+            "age_stage": "senior",
+            "neutered": True,
+            "body_condition": "overweight",
+            "mobility_level": 0.55,
+            "disease_history": ["arthritis"],
+        },
+        "personality": {
+            "neuroticism": 0.55,
+            "extraversion": 0.25,
+            "dominance": 0.45,
+            "impulsiveness": 0.20,
+            "agreeableness": 0.55,
+        },
+    },
 }
 
 HUMAN_CONFIG = {
@@ -274,13 +417,23 @@ class PathFinder:
 
 # ===================== 猫智能体 =====================
 class CatAgent:
-    def __init__(self, start_x, start_y, zone_map, passable_map, scale_x, scale_y):
+    def __init__(self, start_x, start_y, zone_map, passable_map, scale_x, scale_y, cat_profile=None):
         self.zone_map, self.passable_map = zone_map, passable_map
         self.scale_x, self.scale_y = scale_x, scale_y
         self.h, self.w = zone_map.shape
         self.x, self.y = float(start_x), float(start_y)
-        self.energy = CAT_CONFIG["initial_energy"]
-        self.satisfaction = CAT_CONFIG["initial_satisfaction"]
+        self.cat_profile = normalize_cat_profile(cat_profile)
+        self.objective = self.cat_profile["objective"]
+        self.personality = self.cat_profile["personality"]
+        self.state = {
+            "energy": CAT_CONFIG["initial_energy"],
+            "satisfaction": CAT_CONFIG["initial_satisfaction"],
+            "hunger": 0.25,
+            "stress": 0.25 + self.personality["neuroticism"] * 0.15,
+            "boredom": 0.35,
+            "security": 0.65 - self.personality["neuroticism"] * 0.15,
+            "social_need": 0.35 + self.personality["agreeableness"] * 0.20,
+        }
         self.angle = random.uniform(0, 2*np.pi)
         self.trajectory = [(self.x, self.y)]
         self.visit_count = np.zeros((self.h, self.w), dtype=float)
@@ -289,7 +442,29 @@ class CatAgent:
         self.steps_since_goal_change = 0
         self.is_running = False
         self.run_steps_remaining = 0
+        self.current_behavior = "wander"
+        # 成年猫通常每天休息约 12-16 小时；默认以 14/24 作为日周期校准目标。
+        self.rest_drive = 14.0 / 24.0
+        self.zone_stay_ticks = {}
+        self.behavior_counts = {}
+        self.behavior_durations = {}
         self.choose_new_goal()
+
+    @property
+    def energy(self):
+        return self.state["energy"]
+
+    @energy.setter
+    def energy(self, value):
+        self.state["energy"] = clamp(value, 0.0, 1.0)
+
+    @property
+    def satisfaction(self):
+        return self.state["satisfaction"]
+
+    @satisfaction.setter
+    def satisfaction(self, value):
+        self.state["satisfaction"] = clamp(value, 0.0, 1.0)
 
     def _add_heatmap(self, y, x, weight):
         if 0 <= y < self.h and 0 <= x < self.w:
@@ -301,13 +476,133 @@ class CatAgent:
                 if 0 <= ny < self.h and 0 <= nx < self.w:
                     self.visit_count[ny, nx] += weight * (0.5 / (1 + np.sqrt(dy*dy+dx*dx)))
 
+    def _age_modifiers(self):
+        age = self.objective["age_stage"]
+        modifiers = {
+            "speed": 1.0,
+            "run": 1.0,
+            "rest": 1.0,
+            "explore": 1.0,
+            "hide": 1.0,
+            "switch_limit": 1.0,
+        }
+        if age == "kitten":
+            modifiers.update({"speed": 1.05, "run": 1.15, "rest": 1.20, "explore": 1.25, "switch_limit": 0.80})
+        elif age == "young":
+            modifiers.update({"speed": 1.10, "run": 1.25, "explore": 1.25, "switch_limit": 0.85})
+        elif age == "senior":
+            modifiers.update({"speed": 0.72, "run": 0.45, "rest": 1.55, "explore": 0.65, "hide": 1.15, "switch_limit": 1.30})
+        return modifiers
+
+    def _rest_target_ratio(self):
+        age = self.objective["age_stage"]
+        if age == "kitten":
+            return 16.0 / 24.0
+        if age == "senior":
+            return 17.0 / 24.0
+        return 14.0 / 24.0
+
+    def _disease_modifiers(self):
+        diseases = set(self.objective.get("disease_history", []))
+        modifiers = {
+            "speed": self.objective["mobility_level"],
+            "run": self.objective["mobility_level"],
+            "rest": 1.0,
+            "explore": 1.0,
+            "hide": 1.0,
+            "satisfaction": 1.0,
+        }
+        if "arthritis" in diseases:
+            modifiers.update({
+                "speed": modifiers["speed"] * 0.70,
+                "run": modifiers["run"] * 0.45,
+                "rest": modifiers["rest"] * 1.45,
+                "explore": modifiers["explore"] * 0.70,
+            })
+        if "obesity" in diseases or self.objective["body_condition"] in {"overweight", "obese"}:
+            modifiers["speed"] *= 0.85
+            modifiers["run"] *= 0.65
+            modifiers["rest"] *= 1.15
+        if "vision_impairment" in diseases:
+            modifiers["explore"] *= 0.70
+            modifiers["hide"] *= 1.20
+        if "chronic_pain" in diseases:
+            modifiers["speed"] *= 0.80
+            modifiers["run"] *= 0.60
+            modifiers["hide"] *= 1.30
+            modifiers["satisfaction"] *= 0.90
+        return modifiers
+
+    def calculate_behavior_weights(self):
+        p, s = self.personality, self.state
+        age_mod = self._age_modifiers()
+        disease_mod = self._disease_modifiers()
+        cur_zone = self.zone_map[int(self.y), int(self.x)]
+
+        weights = {
+            "rest": 6.00 + self.rest_drive * 12.00 + (1.0 - s["energy"]) * 2.0 + s["stress"] * 0.70,
+            "feed": 0.18 + s["hunger"] * 1.60,
+            "explore": 0.35 + p["extraversion"] * 1.35 + s["boredom"] * 1.35,
+            "watch_window": 0.25 + p["extraversion"] * 0.65 + s["boredom"] * 0.60,
+            "hide": 0.25 + p["neuroticism"] * 1.55 + s["stress"] * 1.60 + (1.0 - s["security"]) * 1.10,
+            "run": 0.08 + p["impulsiveness"] * 0.70 + p["extraversion"] * 0.45 + s["boredom"] * 0.30,
+            "wander": 0.60 + (1.0 - abs(s["hunger"] - 0.45)) * 0.35,
+            "claim_spot": 0.20 + p["dominance"] * 1.25,
+            "approach_human": 0.15 + p["agreeableness"] * 1.55 + s["social_need"] * 1.10 - p["neuroticism"] * 0.45,
+        }
+
+        if self.objective.get("neutered") is False:
+            weights["claim_spot"] += 0.55 + p["dominance"] * 0.50
+            weights["wander"] += 0.20
+        if cur_zone == "cat_feeding":
+            weights["feed"] += 0.75
+        if cur_zone == "cat_rest":
+            weights["rest"] += 0.55
+            weights["hide"] += 0.35
+        if cur_zone == "window":
+            weights["watch_window"] += 0.65
+        if cur_zone in {"human_sleep", "human_work", "shared"}:
+            weights["approach_human"] += p["agreeableness"] * 0.45
+            weights["hide"] += p["neuroticism"] * 0.25
+
+        weights["rest"] *= age_mod["rest"] * disease_mod["rest"]
+        weights["explore"] *= age_mod["explore"] * disease_mod["explore"]
+        weights["hide"] *= age_mod["hide"] * disease_mod["hide"]
+        weights["run"] *= age_mod["run"] * disease_mod["run"]
+        total_ticks = sum(self.behavior_counts.values())
+        if total_ticks > 20:
+            rest_ratio = self.behavior_counts.get(CAT_BEHAVIOR_LABELS["rest"], 0) / total_ticks
+            rest_target = self._rest_target_ratio()
+            if rest_ratio > rest_target + 0.05:
+                weights["rest"] *= max(0.10, 1.0 - (rest_ratio - rest_target) * 8.0)
+        return {key: clamp(value, 0.01, 8.0) for key, value in weights.items()}
+
+    def behavior_to_zones(self, behavior):
+        mapping = {
+            "rest": ["cat_rest", "human_sleep", "empty"],
+            "feed": ["cat_feeding"],
+            "explore": ["empty", "shared", "window", "human_work"],
+            "watch_window": ["window"],
+            "hide": ["cat_rest", "human_sleep", "empty"],
+            "run": ["empty", "shared"],
+            "wander": ["empty", "shared", "window", "cat_rest"],
+            "claim_spot": ["cat_rest", "window", "shared", "cat_feeding"],
+            "approach_human": ["shared", "human_work", "human_sleep"],
+        }
+        return mapping.get(behavior, ["empty", "shared"])
+
     def choose_new_goal(self):
         coords = np.where(self.passable_map)
         if len(coords[0]) == 0: return
         cur_zone = self.zone_map[int(self.y), int(self.x)]
-        targets = (["cat_rest","cat_feeding","shared","empty"] if self.energy < 0.3 else
-                   ["window","shared","empty","cat_rest"] if self.energy < 0.7 else
-                   ["empty","shared","window","cat_rest"])
+        total_ticks = max(1, sum(self.behavior_counts.values()))
+        rest_ratio = self.behavior_counts.get(CAT_BEHAVIOR_LABELS["rest"], 0) / total_ticks
+        rest_target = self._rest_target_ratio()
+        if total_ticks > 20 and rest_ratio < rest_target - 0.02 and random.random() < 0.95:
+            self.current_behavior = "rest"
+        else:
+            self.current_behavior = weighted_random_choice(self.calculate_behavior_weights())
+        targets = self.behavior_to_zones(self.current_behavior)
         for tz in targets:
             if tz == cur_zone: continue
             zc = np.where(self.zone_map == tz)
@@ -320,19 +615,54 @@ class CatAgent:
         self.goal_y, self.goal_x = float(coords[0][idx]), float(coords[1][idx])
         self.steps_since_goal_change = 0
 
+    def _goal_change_limit(self):
+        impulsive = self.personality["impulsiveness"]
+        age_mod = self._age_modifiers()
+        base = 210 * age_mod["switch_limit"] * (1.25 - impulsive * 0.55)
+        return int(clamp(base, 60, 280))
+
+    def _step_length_px(self):
+        p = self.personality
+        age_mod = self._age_modifiers()
+        disease_mod = self._disease_modifiers()
+        speed_mod = age_mod["speed"] * disease_mod["speed"]
+        speed_mod *= 0.88 + p["extraversion"] * 0.22 + p["impulsiveness"] * 0.10
+        if self.state["energy"] < 0.25:
+            speed_mod *= 0.75
+        step_m = CAT_CONFIG["step_length_m"] * clamp(speed_mod, 0.30, 1.45)
+        if self.is_running:
+            step_m *= CAT_CONFIG["jump_distance_multiplier"]
+        return step_m / self.scale_x
+
+    def _run_probability(self):
+        if self.current_behavior in {"rest", "feed", "hide"}:
+            return 0.0
+        p = self.personality
+        age_mod = self._age_modifiers()
+        disease_mod = self._disease_modifiers()
+        prob = CAT_CONFIG["run_probability"]
+        prob *= 0.005 + p["impulsiveness"] * 0.020 + p["extraversion"] * 0.015
+        prob *= age_mod["run"] * disease_mod["run"]
+        if self.current_behavior == "run":
+            prob *= 2.50
+        if self.state["energy"] < 0.30 or self.state["stress"] > 0.80:
+            prob *= 0.55
+        return clamp(prob, 0.0, 0.18)
+
     def move(self):
         if self.goal_x is None: self.choose_new_goal(); return
         dx, dy = self.goal_x - self.x, self.goal_y - self.y
         dist = np.sqrt(dx*dx + dy*dy)
         self.steps_since_goal_change += 1
-        if dist < 3.0 or self.steps_since_goal_change > 200:
+        if dist < 3.0 or self.steps_since_goal_change > self._goal_change_limit():
             self.update_state_at_goal()
             self.choose_new_goal()
             self.is_running = False
             return
-        if not self.is_running and random.random() < CAT_CONFIG["run_probability"]:
+        if not self.is_running and random.random() < self._run_probability():
             self.is_running = True
             self.run_steps_remaining = random.randint(10, 30)
+            self.current_behavior = "run"
         if self.is_running:
             self.run_steps_remaining -= 1
             if self.run_steps_remaining <= 0: self.is_running = False
@@ -342,8 +672,7 @@ class CatAgent:
         mt = np.radians(CAT_CONFIG["max_turn_angle"])
         self.angle += np.sign(ad) * min(abs(ad), mt) if abs(ad) > mt else ad
 
-        step = CAT_CONFIG["step_length_m"] * (CAT_CONFIG["jump_distance_multiplier"] if self.is_running else 1)
-        step_px = step / self.scale_x
+        step_px = self._step_length_px()
         nx = np.clip(self.x + np.cos(self.angle)*step_px, 1, self.w-2)
         ny = np.clip(self.y + np.sin(self.angle)*step_px, 1, self.h-2)
 
@@ -358,29 +687,91 @@ class CatAgent:
     def update_state_at_goal(self):
         cz = self.zone_map[int(self.y), int(self.x)]
         if cz == "cat_rest":
-            self.energy = min(1.0, self.energy + CAT_CONFIG["rest_energy_recover"])
-            self.satisfaction = min(1.0, self.satisfaction + 0.02)
+            self.energy = self.energy + CAT_CONFIG["rest_energy_recover"]
+            self.satisfaction = self.satisfaction + 0.02
+            self.state["security"] = clamp(self.state["security"] + 0.05)
+            self.state["stress"] = clamp(self.state["stress"] - 0.05)
         elif cz == "cat_feeding":
-            self.energy = min(1.0, self.energy + CAT_CONFIG["feed_energy_recover"])
-            self.satisfaction = min(1.0, self.satisfaction + 0.03)
-        elif cz == "window":  self.satisfaction = min(1.0, self.satisfaction + 0.02)
-        elif cz == "shared":  self.satisfaction = min(1.0, self.satisfaction + 0.01)
+            self.energy = self.energy + CAT_CONFIG["feed_energy_recover"]
+            self.satisfaction = self.satisfaction + 0.03
+            self.state["hunger"] = clamp(self.state["hunger"] - 0.35)
+        elif cz == "window":
+            self.satisfaction = self.satisfaction + 0.02
+            self.state["boredom"] = clamp(self.state["boredom"] - 0.06)
+        elif cz == "shared":
+            self.satisfaction = self.satisfaction + 0.01
+            self.state["social_need"] = clamp(self.state["social_need"] - 0.04)
+
+        if self.current_behavior == "hide":
+            self.state["security"] = clamp(self.state["security"] + 0.04)
+            self.state["stress"] = clamp(self.state["stress"] - 0.04)
+        elif self.current_behavior in {"explore", "run", "wander"}:
+            self.state["boredom"] = clamp(self.state["boredom"] - 0.04)
+        elif self.current_behavior == "approach_human":
+            self.state["social_need"] = clamp(self.state["social_need"] - 0.08)
 
     def get_behavior(self):
         if self.is_running:
-            return "奔跑"
-        cz = self.zone_map[int(self.y), int(self.x)]
+            return CAT_BEHAVIOR_LABELS["run"]
+        return CAT_BEHAVIOR_LABELS.get(self.current_behavior, "游走")
+
+    def get_zone(self):
+        return str(self.zone_map[int(self.y), int(self.x)])
+
+    def _update_dynamic_state(self):
+        p = self.personality
+        disease_mod = self._disease_modifiers()
+        cz = self.get_zone()
+
+        self.energy = self.energy - CAT_CONFIG["energy_consume_per_tick"] * (1.8 if self.is_running else 1.0)
+        self.state["hunger"] = clamp(self.state["hunger"] + 0.00045)
+        self.state["boredom"] = clamp(self.state["boredom"] + 0.00035 + (0.00025 if self.current_behavior in {"rest", "hide"} else 0.0))
+        self.state["social_need"] = clamp(self.state["social_need"] + 0.00025 * p["agreeableness"])
+
+        stress_delta = 0.00020 * p["neuroticism"]
+        if cz in {"shared", "human_sleep", "human_work"}:
+            stress_delta += 0.00022 * p["neuroticism"]
+        if cz in {"cat_rest", "window"}:
+            stress_delta -= 0.00030
+        self.state["stress"] = clamp(self.state["stress"] + stress_delta)
+
+        security_delta = -0.00015 * p["neuroticism"]
         if cz == "cat_rest":
-            return "休息"
-        if cz == "cat_feeding":
-            return "进食"
-        if cz == "window":
-            return "观望"
-        return "游走"
+            security_delta += 0.00045
+        elif cz in {"shared", "human_work"}:
+            security_delta -= 0.00018
+        self.state["security"] = clamp(self.state["security"] + security_delta)
+
+        sat_delta = (self.state["security"] - self.state["stress"]) * 0.00025 * disease_mod["satisfaction"]
+        sat_delta -= self.state["hunger"] * 0.00010
+        self.satisfaction = self.satisfaction + sat_delta
+
+        if self.get_behavior() == CAT_BEHAVIOR_LABELS["rest"]:
+            self.rest_drive = clamp(self.rest_drive - 0.0009, 0.15, 0.95)
+        else:
+            self.rest_drive = clamp(self.rest_drive + 0.0012, 0.15, 0.95)
+
+    def record_tick_stats(self):
+        zone = self.get_zone()
+        behavior = self.get_behavior()
+        self.zone_stay_ticks[zone] = self.zone_stay_ticks.get(zone, 0) + 1
+        self.behavior_counts[behavior] = self.behavior_counts.get(behavior, 0) + 1
+        self.behavior_durations[behavior] = self.behavior_durations.get(behavior, 0) + 1
+
+    def get_behavior_summary(self):
+        return {
+            "profile_name": self.cat_profile["name"],
+            "total_ticks": int(sum(self.zone_stay_ticks.values())),
+            "zone_stay_ticks": dict(sorted(self.zone_stay_ticks.items())),
+            "behavior_counts": dict(sorted(self.behavior_counts.items())),
+            "behavior_durations": dict(sorted(self.behavior_durations.items())),
+            "final_state": {key: round(float(value), 4) for key, value in self.state.items()},
+        }
 
     def step(self):
-        self.energy = max(0.1, self.energy - CAT_CONFIG["energy_consume_per_tick"])
         self.move()
+        self._update_dynamic_state()
+        self.record_tick_stats()
 
 
 # ===================== 人类智能体 =====================
@@ -529,15 +920,22 @@ class HumanAgent:
 
 # ===================== 模拟主控 =====================
 class Simulation:
-    def __init__(self, floor_plan_path, total_ticks=5000):
+    def __init__(self, floor_plan_path, total_ticks=5000, cat_profile=None, random_seed=None,
+                 output_dir="outputs", auto_export=False):
+        if random_seed is not None:
+            random.seed(random_seed)
+            np.random.seed(random_seed)
         self.total_ticks = total_ticks
+        self.random_seed = random_seed
+        self.output_dir = output_dir
+        self.auto_export = auto_export
         parser = FloorPlanParser(floor_plan_path)
         self.img, self.zone_map, self.passable_maps, self.zone_stats, self.scale_x, self.scale_y = parser.parse()
 
         cp = np.where(self.passable_maps["cat"])
         if len(cp[0]) == 0: raise ValueError("没有猫可通行的区域")
         idx = random.randint(0, len(cp[0])-1)
-        self.cat = CatAgent(cp[1][idx], cp[0][idx], self.zone_map, self.passable_maps["cat"], self.scale_x, self.scale_y)
+        self.cat = CatAgent(cp[1][idx], cp[0][idx], self.zone_map, self.passable_maps["cat"], self.scale_x, self.scale_y, cat_profile)
 
         hp = np.where(self.passable_maps["human"])
         if len(hp[0]) == 0: raise ValueError("没有人类可通行的区域")
@@ -555,12 +953,67 @@ class Simulation:
                 "tick": tick,
                 "cat_x": self.cat.x,
                 "cat_y": self.cat.y,
+                "cat_zone": self.cat.get_zone(),
                 "cat_behavior": self.cat.get_behavior(),
+                "cat_energy": self.cat.state["energy"],
+                "cat_stress": self.cat.state["stress"],
+                "cat_hunger": self.cat.state["hunger"],
+                "cat_boredom": self.cat.state["boredom"],
                 "human_x": self.human.x,
                 "human_y": self.human.y,
                 "human_behavior": self.human.get_behavior(),
             })
         print("[模拟] 运行完成!")
+        if self.auto_export:
+            self.export_outputs()
+
+    def export_tick_records_csv(self, csv_path=None):
+        if not hasattr(self, "tick_records"):
+            raise RuntimeError("尚未运行模拟，请先调用 run()")
+        if csv_path is None:
+            csv_path = os.path.join(self.output_dir, "tick_records.csv")
+        os.makedirs(os.path.dirname(csv_path) or ".", exist_ok=True)
+        fields = [
+            "tick", "cat_x", "cat_y", "cat_zone", "cat_behavior",
+            "cat_energy", "cat_stress", "cat_hunger", "cat_boredom",
+            "human_x", "human_y", "human_behavior",
+        ]
+        with open(csv_path, "w", newline="", encoding="utf-8-sig") as f:
+            writer = csv.DictWriter(f, fieldnames=fields)
+            writer.writeheader()
+            writer.writerows(self.tick_records)
+        print(f"[输出] tick records 已保存: {csv_path}")
+        return csv_path
+
+    def export_cat_behavior_summary(self, json_path=None):
+        if json_path is None:
+            json_path = os.path.join(self.output_dir, "cat_behavior_summary.json")
+        os.makedirs(os.path.dirname(json_path) or ".", exist_ok=True)
+        summary = self.cat.get_behavior_summary()
+        summary["random_seed"] = self.random_seed
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(summary, f, ensure_ascii=False, indent=2)
+        print(f"[输出] 猫行为摘要已保存: {json_path}")
+        return json_path
+
+    def export_cat_profile_used(self, json_path=None):
+        if json_path is None:
+            json_path = os.path.join(self.output_dir, "cat_profile_used.json")
+        os.makedirs(os.path.dirname(json_path) or ".", exist_ok=True)
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(self.cat.cat_profile, f, ensure_ascii=False, indent=2)
+        print(f"[输出] 猫档案已保存: {json_path}")
+        return json_path
+
+    def export_outputs(self, output_dir=None):
+        if output_dir is not None:
+            self.output_dir = output_dir
+        os.makedirs(self.output_dir, exist_ok=True)
+        return {
+            "tick_records": self.export_tick_records_csv(),
+            "cat_behavior_summary": self.export_cat_behavior_summary(),
+            "cat_profile_used": self.export_cat_profile_used(),
+        }
 
     def visualize(self, save_path=None):
         fig, axes = plt.subplots(2, 2, figsize=(18, 16))
@@ -612,8 +1065,13 @@ class Simulation:
 
 Parameters:
 - Total Steps: {self.total_ticks}
+- Cat Profile: {self.cat.cat_profile['name']}
+- Age Stage: {self.cat.objective['age_stage']}
 - Cat Energy: {self.cat.energy:.2f}
 - Cat Satisfaction: {self.cat.satisfaction:.2f}
+- Cat Stress: {self.cat.state['stress']:.2f}
+- Cat Hunger: {self.cat.state['hunger']:.2f}
+- Cat Boredom: {self.cat.state['boredom']:.2f}
 - Human Satisfaction: {self.human.satisfaction:.2f}
 
 Activity Phase: {phase}
@@ -627,6 +1085,7 @@ Status:
 
         plt.tight_layout()
         if save_path:
+            os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
             plt.savefig(save_path, dpi=200, bbox_inches="tight", facecolor='white')
             print(f"[输出] 结果图已保存: {save_path}")
         plt.close()
@@ -639,21 +1098,25 @@ if __name__ == "__main__":
     print(" Standalone Edition - Zero Dependencies")
     print("="*60)
 
+    result_dir = "result"
+    os.makedirs(result_dir, exist_ok=True)
+
     # 步骤1：自动生成标准户型图（与你的原始户型完全一致）
-    floor_plan = generate_floor_plan("floor_plan.png")
+    floor_plan = generate_floor_plan(os.path.join(result_dir, "floor_plan.png"))
 
     # ★ 如果你想替换成自己的户型图，注释掉上面一行，改为：
     # floor_plan = "你的户型图.png"
 
     # 步骤2：创建模拟（默认1000步，可改为5000步获得更精确结果）
-    sim = Simulation(floor_plan, total_ticks=1000)
+    sim = Simulation(floor_plan, total_ticks=1000, output_dir=result_dir)
 
     # 步骤3：运行模拟
     sim.run()
 
     # 步骤4：输出结果（四宫格图：轨迹 + 猫热力图 + 人热力图 + 报告）
-    sim.visualize(save_path="simulation_result.png")
+    sim.visualize(save_path=os.path.join(result_dir, "simulation_result.png"))
+    sim.export_outputs()
 
     print("\n" + "="*60)
-    print(" ✅ 全部完成！请查看当前文件夹下的 simulation_result.png")
+    print(" ✅ 全部完成！请查看 result/ 下的 simulation_result.png 和数据文件")
     print("="*60)
