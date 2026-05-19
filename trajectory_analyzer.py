@@ -10,6 +10,9 @@ import pandas as pd
 
 # 行为权重（供模块 B 空间功能强度使用）
 BEHAVIOR_WEIGHTS = {
+    "玩耍": 6.0,
+    "抓挠": 3.0,
+    "观察": 2.0,
     "奔跑": 8.0,
     "探索": 5.0,
     "游走": 4.0,
@@ -32,7 +35,22 @@ BEHAVIOR_WEIGHTS = {
 }
 
 # 静止/睡眠行为集合（用于活跃共现判断）
-PASSIVE_BEHAVIORS = {"休息", "睡眠", "躲藏", "外出", "休闲"}
+PASSIVE_BEHAVIORS = {"休息", "睡眠", "躲藏", "外出", "休闲", "观察", "观望"}
+
+CAT_BEHAVIOR_GROUP_LABELS = {
+    "玩耍": {"奔跑", "探索", "游走"},
+    "抓挠": {"占位"},
+    "观察": {"观望"},
+}
+CAT_BEHAVIOR_GROUP_LOOKUP = {
+    raw_label: group_label
+    for group_label, raw_labels in CAT_BEHAVIOR_GROUP_LABELS.items()
+    for raw_label in raw_labels
+}
+
+
+def summarize_cat_behavior(label: str) -> str:
+    return CAT_BEHAVIOR_GROUP_LOOKUP.get(label, label)
 
 
 class TrajectoryAnalyzer:
@@ -159,6 +177,57 @@ class TrajectoryAnalyzer:
         gy = int(np.clip((float(y) / self.source_height_px) * self.grid_height, 0, self.grid_height - 1))
         return gy, gx  # 返回 (row, col) 以对应矩阵索引
 
+    def _build_velocity_columns(self) -> None:
+        """基于相邻 tick 的坐标差分，推导速度向量与速度标量。"""
+        if self.df is None or "tick" not in self.df.columns:
+            return
+
+        self.df = self.df.sort_values("tick").reset_index(drop=True)
+        x_scale_m = self.house_width_m / self.source_width_px
+        y_scale_m = self.house_depth_m / self.source_height_px
+
+        for prefix in ("cat", "human"):
+            x = pd.to_numeric(self.df.get(f"{prefix}_x"), errors="coerce")
+            y = pd.to_numeric(self.df.get(f"{prefix}_y"), errors="coerce")
+            valid = x.notna() & y.notna()
+            prev_valid = valid.shift(1, fill_value=False)
+
+            dx_px = x - x.shift(1)
+            dy_px = y - y.shift(1)
+            invalid = ~(valid & prev_valid)
+            dx_px = dx_px.mask(invalid)
+            dy_px = dy_px.mask(invalid)
+
+            dx_m = dx_px * x_scale_m
+            dy_m = dy_px * y_scale_m
+
+            self.df[f"{prefix}_vx_px_per_tick"] = dx_px
+            self.df[f"{prefix}_vy_px_per_tick"] = dy_px
+            self.df[f"{prefix}_speed_px_per_tick"] = np.sqrt(dx_px**2 + dy_px**2)
+            self.df[f"{prefix}_vx_m_per_tick"] = dx_m
+            self.df[f"{prefix}_vy_m_per_tick"] = dy_m
+            self.df[f"{prefix}_speed_m_per_tick"] = np.sqrt(dx_m**2 + dy_m**2)
+
+    def get_velocity_vectors(self, subject: str = "cat", unit: str = "m") -> pd.DataFrame:
+        """返回指定对象的逐 tick 速度向量，基于相邻 tick 坐标差分。"""
+        if self.df is None:
+            raise RuntimeError("尚未加载数据，请先调用 load_from_records() 或 load_from_csv()")
+        if subject not in {"cat", "human"}:
+            raise ValueError("subject 仅支持 'cat' 或 'human'")
+        if unit not in {"m", "px"}:
+            raise ValueError("unit 仅支持 'm' 或 'px'")
+
+        suffix = "m_per_tick" if unit == "m" else "px_per_tick"
+        cols = [
+            "tick",
+            f"{subject}_x",
+            f"{subject}_y",
+            f"{subject}_vx_{suffix}",
+            f"{subject}_vy_{suffix}",
+            f"{subject}_speed_{suffix}",
+        ]
+        return self.df[cols].copy()
+
     def _grid_distance_m(self, a: tuple[int, int], b: tuple[int, int]) -> float:
         """返回两个格栅中心点之间的近似物理距离。"""
         dy = (a[0] - b[0]) * self.cell_height_m
@@ -170,6 +239,13 @@ class TrajectoryAnalyzer:
         if self.df is None:
             return
 
+        if "cat_behavior_group" not in self.df.columns:
+            self.df["cat_behavior_group"] = self.df["cat_behavior"].map(summarize_cat_behavior)
+        else:
+            fallback = self.df["cat_behavior"].map(summarize_cat_behavior)
+            self.df["cat_behavior_group"] = self.df["cat_behavior_group"].fillna(fallback)
+
+        self._build_velocity_columns()
         self.cat_behavior_grid = {}
         self.human_behavior_grid = {}
         self.cooccurrence_all = np.zeros(self.grid_shape, dtype=np.int32)
@@ -188,7 +264,9 @@ class TrajectoryAnalyzer:
             key = (cgy, cgx)
             if key not in self.cat_behavior_grid:
                 self.cat_behavior_grid[key] = {}
-            beh = row.cat_behavior
+            beh = getattr(row, "cat_behavior_group", None)
+            if beh is None or (isinstance(beh, float) and pd.isna(beh)) or str(beh).strip() == "":
+                beh = summarize_cat_behavior(row.cat_behavior)
             self.cat_behavior_grid[key][beh] = self.cat_behavior_grid[key].get(beh, 0) + 1
 
             if human_outside:
@@ -208,14 +286,14 @@ class TrajectoryAnalyzer:
             if self._grid_distance_m((cgy, cgx), (hgy, hgx)) <= self.proximity_m:
                 # 记录在猫位置格栅（冲突的主体）
                 self.cooccurrence_all[cgy, cgx] += 1
-                if row.cat_behavior not in PASSIVE_BEHAVIORS and row.human_behavior not in PASSIVE_BEHAVIORS:
+                if beh not in PASSIVE_BEHAVIORS and row.human_behavior not in PASSIVE_BEHAVIORS:
                     self.cooccurrence_active[cgy, cgx] += 1
 
-        total_ticks = len(self.df)
         cat_cells = len(self.cat_behavior_grid)
         human_cells = len(self.human_behavior_grid)
         total_cooc = int(self.cooccurrence_all.sum())
         active_cooc = int(self.cooccurrence_active.sum())
+        total_ticks = len(self.df)
         print(f"[模块A] 格栅化完成 | 总Ticks: {total_ticks}")
         print(
             f"         格栅: {self.grid_height}行 x {self.grid_width}列 | "
@@ -267,13 +345,15 @@ if __name__ == "__main__":
     print(" 模块 A — 轨迹格栅化引擎 独立测试")
     print("=" * 60)
 
-    floor_plan = generate_floor_plan("floor_plan.png")
-    sim = Simulation(floor_plan, total_ticks=2000)
+    result_dir = os.path.join(os.path.dirname(__file__), "result")
+    os.makedirs(result_dir, exist_ok=True)
+    floor_plan = generate_floor_plan(os.path.join(result_dir, "floor_plan.png"))
+    sim = Simulation(floor_plan, total_ticks=2000, output_dir=result_dir)
     sim.run()
 
     analyzer = TrajectoryAnalyzer()
     analyzer.load_from_records(sim.tick_records)
-    analyzer.export_csv("trajectory.csv")
+    analyzer.export_csv(os.path.join(result_dir, "trajectory.csv"))
 
     summary = analyzer.get_behavior_summary()
     print("\n[猫行为统计]")

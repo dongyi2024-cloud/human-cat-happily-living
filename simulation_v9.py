@@ -130,6 +130,25 @@ CAT_BEHAVIOR_LABELS = {
     "approach_human": "亲近",
 }
 
+# 临时归纳层：
+# - 玩耍：把动态行为合并到同一语义桶，便于后续分析和 PRD 阶段性适配
+# - 抓挠：先映射到占位，后续如需新增独立行为再拆分
+# - 观察：直接映射到当前的观望
+CAT_BEHAVIOR_GROUP_LABELS = {
+    "玩耍": {"奔跑", "探索", "游走"},
+    "抓挠": {"占位"},
+    "观察": {"观望"},
+}
+CAT_BEHAVIOR_GROUP_LOOKUP = {
+    raw_label: group_label
+    for group_label, raw_labels in CAT_BEHAVIOR_GROUP_LABELS.items()
+    for raw_label in raw_labels
+}
+
+
+def summarize_cat_behavior(label):
+    return CAT_BEHAVIOR_GROUP_LOOKUP.get(label, label)
+
 DEFAULT_CAT_PROFILE = {
     "name": "default_adult",
     "objective": {
@@ -449,7 +468,9 @@ class CatAgent:
         self.rest_drive = 14.0 / 24.0
         self.zone_stay_ticks = {}
         self.behavior_counts = {}
+        self.behavior_group_counts = {}
         self.behavior_durations = {}
+        self.behavior_group_durations = {}
         self.choose_new_goal()
 
     @property
@@ -756,9 +777,12 @@ class CatAgent:
     def record_tick_stats(self):
         zone = self.get_zone()
         behavior = self.get_behavior()
+        behavior_group = summarize_cat_behavior(behavior)
         self.zone_stay_ticks[zone] = self.zone_stay_ticks.get(zone, 0) + 1
         self.behavior_counts[behavior] = self.behavior_counts.get(behavior, 0) + 1
+        self.behavior_group_counts[behavior_group] = self.behavior_group_counts.get(behavior_group, 0) + 1
         self.behavior_durations[behavior] = self.behavior_durations.get(behavior, 0) + 1
+        self.behavior_group_durations[behavior_group] = self.behavior_group_durations.get(behavior_group, 0) + 1
 
     def get_behavior_summary(self):
         return {
@@ -766,7 +790,13 @@ class CatAgent:
             "total_ticks": int(sum(self.zone_stay_ticks.values())),
             "zone_stay_ticks": dict(sorted(self.zone_stay_ticks.items())),
             "behavior_counts": dict(sorted(self.behavior_counts.items())),
+            "behavior_group_counts": dict(sorted(self.behavior_group_counts.items())),
             "behavior_durations": dict(sorted(self.behavior_durations.items())),
+            "behavior_group_durations": dict(sorted(self.behavior_group_durations.items())),
+            "behavior_group_mapping": {
+                key: sorted(value) for key, value in sorted(CAT_BEHAVIOR_GROUP_LABELS.items())
+            },
+            "dynamic_behavior_set": sorted(CAT_BEHAVIOR_GROUP_LABELS["玩耍"]),
             "final_state": {key: round(float(value), 4) for key, value in self.state.items()},
         }
 
@@ -1048,7 +1078,7 @@ class HumanAgent:
 # ===================== 模拟主控 =====================
 class Simulation:
     def __init__(self, floor_plan_path, total_ticks=5000, cat_profile=None, random_seed=None,
-                 output_dir="outputs", auto_export=False, human_profile_id="default_china",
+                 output_dir="result", auto_export=False, human_profile_id="default_china",
                  country="CN", day_type="average_day", tick_minutes=1.0,
                  data_dir="data", human_mapping_path="config/human_profile_mapping.json"):
         if random_seed is not None:
@@ -1105,6 +1135,7 @@ class Simulation:
                 "cat_y": self.cat.y,
                 "cat_zone": self.cat.get_zone(),
                 "cat_behavior": self.cat.get_behavior(),
+                "cat_behavior_group": summarize_cat_behavior(self.cat.get_behavior()),
                 "cat_energy": self.cat.state["energy"],
                 "cat_stress": self.cat.state["stress"],
                 "cat_hunger": self.cat.state["hunger"],
@@ -1128,7 +1159,7 @@ class Simulation:
             csv_path = os.path.join(self.output_dir, "tick_records.csv")
         os.makedirs(os.path.dirname(csv_path) or ".", exist_ok=True)
         fields = [
-            "tick", "cat_x", "cat_y", "cat_zone", "cat_behavior",
+            "tick", "cat_x", "cat_y", "cat_zone", "cat_behavior", "cat_behavior_group",
             "cat_energy", "cat_stress", "cat_hunger", "cat_boredom",
             "human_x", "human_y", "human_zone", "human_activity",
             "human_behavior", "human_state", "human_profile_id",
@@ -1327,6 +1358,25 @@ if __name__ == "__main__":
     sim.visualize(save_path=os.path.join(result_dir, "simulation_result.png"))
     sim.export_outputs()
 
+    # 恢复旧六图 dashboard 逻辑。
+    from trajectory_analyzer import TrajectoryAnalyzer
+    from metrics_calculator import SpaceMetricsCalculator
+    from node_detector import NodeDetector
+    from dashboard import generate_dashboard
+
+    analyzer = TrajectoryAnalyzer()
+    analyzer.load_from_records(sim.tick_records)
+    analyzer.export_csv(os.path.join(result_dir, "trajectory.csv"))
+    metrics = SpaceMetricsCalculator(analyzer).compute_all()
+    detector = NodeDetector(metrics, intensity_pct=80, cooc_pct=90, dbscan_eps=2, dbscan_min_samples=3)
+    nodes = detector.detect()
+    generate_dashboard(
+        metrics,
+        nodes,
+        grid_shape=analyzer.grid_shape,
+        output_path=os.path.join(result_dir, "dashboard.png"),
+    )
+
     print("\n" + "="*60)
-    print(" ✅ 全部完成！请查看 result/ 下的 simulation_result.png 和数据文件")
+    print(" ✅ 全部完成！请查看 result/ 下的 simulation_result.png、dashboard.png 和数据文件")
     print("="*60)

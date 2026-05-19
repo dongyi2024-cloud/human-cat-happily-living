@@ -210,7 +210,7 @@ if __name__ == "__main__":
     print("=" * 60)
 
     analyzer = TrajectoryAnalyzer()
-    analyzer.load_from_csv("trajectory.csv")
+    analyzer.load_from_csv(os.path.join(os.path.dirname(__file__), "result", "trajectory.csv"))
 
     calc = SpaceMetricsCalculator(analyzer)
     metrics = calc.compute_all()

@@ -74,7 +74,7 @@ python dashboard.py
 
 注意：
 
-- 这些脚本可能依赖运行后生成的 `floor_plan.png`、`trajectory.csv` 或其他输出文件。
+- 这些脚本可能依赖运行后生成的 `result/floor_plan.png`、`result/trajectory.csv` 或其他输出文件。
 - 若测试入口生成图片或 CSV，确认输出语义正确，不要把临时产物误当作源码改动提交。
 - 如果修改了共现、冲突、聚类或指标逻辑，应至少验证 `trajectory_analyzer.py` 和相关下游模块。
 

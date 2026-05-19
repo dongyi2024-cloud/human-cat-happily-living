@@ -225,7 +225,7 @@ if __name__ == "__main__":
     print("=" * 60)
 
     analyzer = TrajectoryAnalyzer()
-    analyzer.load_from_csv("trajectory.csv")
+    analyzer.load_from_csv(os.path.join(os.path.dirname(__file__), "result", "trajectory.csv"))
 
     calc = SpaceMetricsCalculator(analyzer)
     metrics = calc.compute_all()
@@ -234,5 +234,5 @@ if __name__ == "__main__":
                             dbscan_eps=2, dbscan_min_samples=3)
     nodes = detector.detect()
 
-    generate_dashboard(metrics, nodes, grid_shape=analyzer.grid_shape, output_path="dashboard.png")
+    generate_dashboard(metrics, nodes, grid_shape=analyzer.grid_shape, output_path=os.path.join("result", "dashboard.png"))
     print("[Module D] Test complete")
