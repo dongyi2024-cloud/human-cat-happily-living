@@ -5,10 +5,15 @@ Standalone Edition: 无需任何外部配置文件
 作者：基于ABM的人宠共居空间优化研究
 """
 
+import os
+
+os.environ.setdefault("MPLCONFIGDIR", "/tmp/human-cat-mplconfig")
+
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')  # 无界面后端，服务器/笔记本通用
 import matplotlib.pyplot as plt
+from matplotlib import font_manager
 from matplotlib.image import imread
 from matplotlib.colors import LinearSegmentedColormap
 from PIL import Image
@@ -17,13 +22,19 @@ from heapq import heappush, heappop
 import random
 import csv
 import json
-import os
 from copy import deepcopy
 
 from time_use_parameter_builder import TimeUseParameterBuilder
 
 # ===================== 中文字体支持 =====================
-plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS', 'DejaVu Sans']
+for font_path in [
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
+]:
+    if os.path.exists(font_path):
+        font_manager.fontManager.addfont(font_path)
+plt.rcParams["font.family"] = "Noto Sans CJK JP"
+plt.rcParams['font.sans-serif'] = ['Noto Sans CJK JP', 'Noto Sans CJK SC', 'SimHei', 'Microsoft YaHei', 'Arial Unicode MS', 'DejaVu Sans']
 plt.rcParams['axes.unicode_minus'] = False
 
 # ===================== 内置区域规则（替代config文件） =====================
@@ -48,6 +59,86 @@ def create_rainbow_colormap():
     return LinearSegmentedColormap.from_list("rainbow", colors)
 
 RAINBOW_CMAP = create_rainbow_colormap()
+
+
+def _dominant_cat_behavior_for_cells(analyzer, member_cells):
+    """从节点成员格栅的猫行为频次里取主导行为。"""
+    counts = {}
+    for cell in member_cells:
+        for behavior, count in analyzer.cat_behavior_grid.get(cell, {}).items():
+            counts[behavior] = counts.get(behavior, 0) + count
+    if not counts:
+        return "未知行为"
+    return max(counts.items(), key=lambda item: item[1])[0]
+
+
+def _cat_function_type(behavior):
+    """把主导行为映射到策略卡模块使用的功能类型。"""
+    return {
+        "奔跑": "运动型",
+        "玩耍": "玩耍型",
+        "探索": "探索型",
+        "游走": "玩耍型",
+        "躲藏": "庇护型",
+        "观察": "观察型",
+        "观望": "观察型",
+        "休息": "休息型",
+        "睡眠": "休息型",
+        "进食": "进食型",
+        "抓挠": "抓挠型",
+        "占位": "抓挠型",
+    }.get(behavior, "探索型")
+
+
+def _entropy_comp_label(entropy_value):
+    if entropy_value >= 1.0:
+        return "功能高度复合型"
+    if entropy_value >= 0.5:
+        return "功能复合型"
+    return "功能单一型"
+
+
+def _zone_for_node(sim, analyzer, node):
+    """用节点质心格栅反查原始户型 zone。"""
+    gx = int(np.clip(round(node.centroid_x), 0, analyzer.grid_width - 1))
+    gy = int(np.clip(round(node.centroid_y), 0, analyzer.grid_height - 1))
+    px = int(np.clip((gx + 0.5) / analyzer.grid_width * analyzer.source_width_px, 0, analyzer.source_width_px - 1))
+    py = int(np.clip((gy + 0.5) / analyzer.grid_height * analyzer.source_height_px, 0, analyzer.source_height_px - 1))
+    return str(sim.zone_map[py, px])
+
+
+def build_strategy_card_nodes(nodes, analyzer, sim):
+    """
+    将模块 C 的 SpaceNode 转成 strategy_cards_module 约定的节点画像。
+
+    strategy_cards_module 保持独立不改；这里仅做字段适配。
+    """
+    card_nodes = []
+    for node in nodes:
+        zone = _zone_for_node(sim, analyzer, node)
+        if node.avg_cat_intensity > 0.1 and node.node_type != "人专属":
+            behavior = _dominant_cat_behavior_for_cells(analyzer, node.member_cells)
+            card_nodes.append({
+                "nid": f"H{node.node_id}",
+                "type": "猫节点",
+                "zone": zone,
+                "cfs": float(node.avg_cat_intensity),
+                "dom_bh": behavior,
+                "func": _cat_function_type(behavior),
+                "comp": _entropy_comp_label(node.avg_cat_entropy),
+            })
+
+        if node.node_type == "冲突节点" or node.avg_cooc_active > 0:
+            risk = "高风险" if node.avg_cooc_active >= 1.0 else "中风险"
+            card_nodes.append({
+                "nid": f"S{node.node_id}",
+                "type": "共现节点",
+                "zone": zone,
+                "dcd_max": float(node.avg_cooc_active),
+                "risk": risk,
+                "conflict_mechanism": "相向交汇",
+            })
+    return card_nodes
 
 
 def clamp(value, min_value=0.0, max_value=1.0):
@@ -1358,11 +1449,13 @@ if __name__ == "__main__":
     sim.visualize(save_path=os.path.join(result_dir, "simulation_result.png"))
     sim.export_outputs()
 
-    # 恢复旧六图 dashboard 逻辑。
+    # 计算节点画像，供策略卡后处理使用。
     from trajectory_analyzer import TrajectoryAnalyzer
     from metrics_calculator import SpaceMetricsCalculator
     from node_detector import NodeDetector
-    from dashboard import generate_dashboard
+    from strategy_cards_module import draw_strategy_cards
+    plt.rcParams["font.family"] = "Noto Sans CJK JP"
+    plt.rcParams['font.sans-serif'] = ['Noto Sans CJK JP', 'Noto Sans CJK SC', 'SimHei', 'Microsoft YaHei', 'Arial Unicode MS', 'DejaVu Sans']
 
     analyzer = TrajectoryAnalyzer()
     analyzer.load_from_records(sim.tick_records)
@@ -1370,13 +1463,13 @@ if __name__ == "__main__":
     metrics = SpaceMetricsCalculator(analyzer).compute_all()
     detector = NodeDetector(metrics, intensity_pct=80, cooc_pct=90, dbscan_eps=2, dbscan_min_samples=3)
     nodes = detector.detect()
-    generate_dashboard(
-        metrics,
-        nodes,
-        grid_shape=analyzer.grid_shape,
-        output_path=os.path.join(result_dir, "dashboard.png"),
+    strategy_nodes = build_strategy_card_nodes(nodes, analyzer, sim)
+    draw_strategy_cards(
+        strategy_nodes,
+        output_dir=os.path.join(result_dir, "strategy_cards"),
+        sim_steps=sim.total_ticks,
     )
 
     print("\n" + "="*60)
-    print(" ✅ 全部完成！请查看 result/ 下的 simulation_result.png、dashboard.png 和数据文件")
+    print(" ✅ 全部完成！请查看 result/ 下的 simulation_result.png、strategy_cards/ 和数据文件")
     print("="*60)
