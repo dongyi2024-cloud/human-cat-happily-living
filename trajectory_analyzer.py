@@ -37,14 +37,50 @@ PASSIVE_BEHAVIORS = {"休息", "睡眠", "躲藏", "外出", "休闲"}
 
 class TrajectoryAnalyzer:
     """
-    从仿真 tick 记录构建 grid_size × grid_size 的行为频次矩阵。
+    从仿真 tick 记录构建物理尺度约束下的行为频次矩阵。
     所有指标均从原始 tick 级别数据计算，避免二次聚合误差。
     """
 
-    def __init__(self, grid_size: int = 200, proximity_cells: int = 5):
-        self.grid_size = grid_size
-        # 共现判断的邻域半径（欧氏距离，格栅单位），5格≈0.35m，与DBSCAN eps一致
-        self.proximity_cells = proximity_cells
+    def __init__(
+        self,
+        grid_size: int | None = None,
+        proximity_cells: int | None = None,
+        house_width_m: float = 14.0,
+        house_depth_m: float = 16.5,
+        source_width_px: int = 200,
+        source_height_px: int = 200,
+        cell_size_min_m: float = 0.30,
+        cell_size_max_m: float = 0.40,
+        target_cell_size_m: float = 0.35,
+        proximity_m: float = 0.35,
+    ):
+        self.house_width_m = float(house_width_m)
+        self.house_depth_m = float(house_depth_m)
+        self.source_width_px = int(source_width_px)
+        self.source_height_px = int(source_height_px)
+
+        if grid_size is None:
+            self.grid_width, self.cell_width_m = self._choose_axis_cells(
+                self.house_width_m, cell_size_min_m, cell_size_max_m, target_cell_size_m
+            )
+            self.grid_height, self.cell_height_m = self._choose_axis_cells(
+                self.house_depth_m, cell_size_min_m, cell_size_max_m, target_cell_size_m
+            )
+        else:
+            # 兼容旧调用；新流程默认不传 grid_size，改用物理尺寸约束自动生成。
+            self.grid_width = self.grid_height = int(grid_size)
+            self.cell_width_m = self.house_width_m / self.grid_width
+            self.cell_height_m = self.house_depth_m / self.grid_height
+
+        self.grid_shape = (self.grid_height, self.grid_width)
+        self.grid_size = max(self.grid_shape)
+        self.avg_cell_size_m = (self.cell_width_m + self.cell_height_m) / 2.0
+
+        if proximity_cells is not None:
+            self.proximity_m = float(proximity_cells) * self.avg_cell_size_m
+        else:
+            self.proximity_m = float(proximity_m)
+        self.proximity_cells = max(1, int(round(self.proximity_m / self.avg_cell_size_m)))
         self.df: pd.DataFrame | None = None
 
         # 每个 cell 的行为频次字典：(gy, gx) -> {behavior: count}
@@ -52,8 +88,35 @@ class TrajectoryAnalyzer:
         self.human_behavior_grid: dict = {}
 
         # 共现计数矩阵（tick 级别）
-        self.cooccurrence_all = np.zeros((grid_size, grid_size), dtype=np.int32)
-        self.cooccurrence_active = np.zeros((grid_size, grid_size), dtype=np.int32)
+        self.cooccurrence_all = np.zeros(self.grid_shape, dtype=np.int32)
+        self.cooccurrence_active = np.zeros(self.grid_shape, dtype=np.int32)
+
+    @staticmethod
+    def _choose_axis_cells(length_m: float, min_cell_m: float, max_cell_m: float, target_cell_m: float) -> tuple[int, float]:
+        """
+        用循环选择某一轴的格栅数量，使单格尺寸落在 [min_cell_m, max_cell_m]，
+        并尽量接近 target_cell_m。
+        """
+        if length_m <= 0:
+            raise ValueError("户型物理长度必须大于 0")
+        if not (0 < min_cell_m <= target_cell_m <= max_cell_m):
+            raise ValueError("格栅尺寸范围必须满足 0 < min <= target <= max")
+
+        best: tuple[float, int, float] | None = None
+        max_cells = int(np.ceil(length_m / min_cell_m)) + 1
+        for cells in range(1, max_cells + 1):
+            cell_m = length_m / cells
+            if min_cell_m <= cell_m <= max_cell_m:
+                score = abs(cell_m - target_cell_m)
+                if best is None or score < best[0]:
+                    best = (score, cells, cell_m)
+
+        if best is None:
+            raise ValueError(
+                f"无法为长度 {length_m:.2f}m 生成 {min_cell_m:.2f}-{max_cell_m:.2f}m 的格栅"
+            )
+        _, cells, cell_m = best
+        return cells, cell_m
 
     # ------------------------------------------------------------------
     # 1. 数据加载
@@ -91,10 +154,16 @@ class TrajectoryAnalyzer:
     # ------------------------------------------------------------------
 
     def _to_grid(self, x: float, y: float) -> tuple[int, int]:
-        """将连续坐标映射到格栅索引，坐标已是像素单位（0~grid_size-1）。"""
-        gx = int(np.clip(x, 0, self.grid_size - 1))
-        gy = int(np.clip(y, 0, self.grid_size - 1))
+        """将仿真像素坐标映射到物理尺度格栅索引。"""
+        gx = int(np.clip((float(x) / self.source_width_px) * self.grid_width, 0, self.grid_width - 1))
+        gy = int(np.clip((float(y) / self.source_height_px) * self.grid_height, 0, self.grid_height - 1))
         return gy, gx  # 返回 (row, col) 以对应矩阵索引
+
+    def _grid_distance_m(self, a: tuple[int, int], b: tuple[int, int]) -> float:
+        """返回两个格栅中心点之间的近似物理距离。"""
+        dy = (a[0] - b[0]) * self.cell_height_m
+        dx = (a[1] - b[1]) * self.cell_width_m
+        return float(np.sqrt(dx * dx + dy * dy))
 
     def _build_grids(self) -> None:
         """遍历每个 tick，构建行为频次字典和共现矩阵。"""
@@ -103,8 +172,8 @@ class TrajectoryAnalyzer:
 
         self.cat_behavior_grid = {}
         self.human_behavior_grid = {}
-        self.cooccurrence_all = np.zeros((self.grid_size, self.grid_size), dtype=np.int32)
-        self.cooccurrence_active = np.zeros((self.grid_size, self.grid_size), dtype=np.int32)
+        self.cooccurrence_all = np.zeros(self.grid_shape, dtype=np.int32)
+        self.cooccurrence_active = np.zeros(self.grid_shape, dtype=np.int32)
 
         for row in self.df.itertuples(index=False):
             cgy, cgx = self._to_grid(row.cat_x, row.cat_y)
@@ -134,9 +203,9 @@ class TrajectoryAnalyzer:
             beh = row.human_behavior
             self.human_behavior_grid[key][beh] = self.human_behavior_grid[key].get(beh, 0) + 1
 
-            # 全状态共现：同一 tick 人猫欧氏距离 ≤ proximity_cells（格栅单位）
-            # 使用邻域而非单格精确匹配，避免浮点截断零共现；5格≈0.35m
-            if (cgy - hgy) ** 2 + (cgx - hgx) ** 2 <= self.proximity_cells ** 2:
+            # 全状态共现：同一 tick 人猫物理距离 ≤ proximity_m。
+            # 使用物理距离而非单格精确匹配，避免格栅尺度调整后共现语义漂移。
+            if self._grid_distance_m((cgy, cgx), (hgy, hgx)) <= self.proximity_m:
                 # 记录在猫位置格栅（冲突的主体）
                 self.cooccurrence_all[cgy, cgx] += 1
                 if row.cat_behavior not in PASSIVE_BEHAVIORS and row.human_behavior not in PASSIVE_BEHAVIORS:
@@ -148,6 +217,11 @@ class TrajectoryAnalyzer:
         total_cooc = int(self.cooccurrence_all.sum())
         active_cooc = int(self.cooccurrence_active.sum())
         print(f"[模块A] 格栅化完成 | 总Ticks: {total_ticks}")
+        print(
+            f"         格栅: {self.grid_height}行 x {self.grid_width}列 | "
+            f"单元: {self.cell_width_m:.3f}m x {self.cell_height_m:.3f}m | "
+            f"共现半径: {self.proximity_m:.2f}m"
+        )
         print(f"         猫活跃格栅: {cat_cells} | 人活跃格栅: {human_cells}")
         print(f"         全状态共现Ticks: {total_cooc} | 活跃共现Ticks: {active_cooc}")
 
@@ -156,15 +230,15 @@ class TrajectoryAnalyzer:
     # ------------------------------------------------------------------
 
     def get_cat_visit_matrix(self) -> np.ndarray:
-        """返回猫总访问次数矩阵（grid_size × grid_size）。"""
-        mat = np.zeros((self.grid_size, self.grid_size), dtype=np.float32)
+        """返回猫总访问次数矩阵。"""
+        mat = np.zeros(self.grid_shape, dtype=np.float32)
         for (gy, gx), behdict in self.cat_behavior_grid.items():
             mat[gy, gx] = sum(behdict.values())
         return mat
 
     def get_human_visit_matrix(self) -> np.ndarray:
-        """返回人总访问次数矩阵（grid_size × grid_size）。"""
-        mat = np.zeros((self.grid_size, self.grid_size), dtype=np.float32)
+        """返回人总访问次数矩阵。"""
+        mat = np.zeros(self.grid_shape, dtype=np.float32)
         for (gy, gx), behdict in self.human_behavior_grid.items():
             mat[gy, gx] = sum(behdict.values())
         return mat
@@ -197,7 +271,7 @@ if __name__ == "__main__":
     sim = Simulation(floor_plan, total_ticks=2000)
     sim.run()
 
-    analyzer = TrajectoryAnalyzer(grid_size=200)
+    analyzer = TrajectoryAnalyzer()
     analyzer.load_from_records(sim.tick_records)
     analyzer.export_csv("trajectory.csv")
 

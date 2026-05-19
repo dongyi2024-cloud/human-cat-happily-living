@@ -35,7 +35,7 @@ class NodeDetector:
         metrics: dict,
         intensity_pct: float = 80.0,   # 强度阈值百分位（前20%）
         cooc_pct: float = 90.0,        # 共现阈值百分位（前10%）
-        dbscan_eps: float = 5.0,       # DBSCAN 邻域半径（格栅单位）
+        dbscan_eps: float = 2.0,       # DBSCAN 邻域半径（约 0.7m，随默认 0.35m 格栅）
         dbscan_min_samples: int = 3,   # DBSCAN 最小样本数
     ):
         self.metrics = metrics
@@ -209,13 +209,13 @@ if __name__ == "__main__":
     print(" 模块 C — 节点峰值检测与聚类 独立测试")
     print("=" * 60)
 
-    analyzer = TrajectoryAnalyzer(grid_size=200)
+    analyzer = TrajectoryAnalyzer()
     analyzer.load_from_csv("trajectory.csv")
 
     calc = SpaceMetricsCalculator(analyzer)
     metrics = calc.compute_all()
 
-    detector = NodeDetector(metrics, intensity_pct=80, cooc_pct=90, dbscan_eps=5, dbscan_min_samples=3)
+    detector = NodeDetector(metrics, intensity_pct=80, cooc_pct=90, dbscan_eps=2, dbscan_min_samples=3)
     nodes = detector.detect()
     detector.print_node_profiles()
 

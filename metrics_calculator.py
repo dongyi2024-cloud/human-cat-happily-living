@@ -20,7 +20,9 @@ class SpaceMetricsCalculator:
 
     def __init__(self, analyzer: TrajectoryAnalyzer):
         self.analyzer = analyzer
-        self.grid_size = analyzer.grid_size
+        self.grid_shape = analyzer.grid_shape
+        self.grid_height = analyzer.grid_height
+        self.grid_width = analyzer.grid_width
 
         self._cat_intensity: np.ndarray | None = None
         self._human_intensity: np.ndarray | None = None
@@ -34,12 +36,12 @@ class SpaceMetricsCalculator:
     def compute_intensity(self, subject: str = "cat") -> np.ndarray:
         """
         subject: "cat" 或 "human"
-        返回 grid_size × grid_size 的强度矩阵。
+        返回 grid_height × grid_width 的强度矩阵。
         """
         grid = (self.analyzer.cat_behavior_grid if subject == "cat"
                 else self.analyzer.human_behavior_grid)
 
-        mat = np.zeros((self.grid_size, self.grid_size), dtype=np.float32)
+        mat = np.zeros(self.grid_shape, dtype=np.float32)
         for (gy, gx), behdict in grid.items():
             score = sum(cnt * BEHAVIOR_WEIGHTS.get(beh, 1.0) for beh, cnt in behdict.items())
             mat[gy, gx] = score
@@ -57,12 +59,12 @@ class SpaceMetricsCalculator:
     def compute_entropy(self, subject: str = "cat") -> np.ndarray:
         """
         对每个格栅单元的行为分布应用香农熵。
-        返回 grid_size × grid_size 的熵矩阵。
+        返回 grid_height × grid_width 的熵矩阵。
         """
         grid = (self.analyzer.cat_behavior_grid if subject == "cat"
                 else self.analyzer.human_behavior_grid)
 
-        mat = np.zeros((self.grid_size, self.grid_size), dtype=np.float32)
+        mat = np.zeros(self.grid_shape, dtype=np.float32)
         for (gy, gx), behdict in grid.items():
             counts = np.array(list(behdict.values()), dtype=np.float64)
             if counts.sum() > 0:
@@ -103,7 +105,7 @@ class SpaceMetricsCalculator:
         """返回每个格栅单元最高频行为字符串的矩阵（空格栅为空字符串）。"""
         grid = (self.analyzer.cat_behavior_grid if subject == "cat"
                 else self.analyzer.human_behavior_grid)
-        mat = np.full((self.grid_size, self.grid_size), "", dtype=object)
+        mat = np.full(self.grid_shape, "", dtype=object)
         for (gy, gx), behdict in grid.items():
             if behdict:
                 mat[gy, gx] = max(behdict, key=behdict.get)
@@ -153,7 +155,7 @@ if __name__ == "__main__":
     print(" 模块 B — 五维评价指标算法 独立测试")
     print("=" * 60)
 
-    analyzer = TrajectoryAnalyzer(grid_size=200)
+    analyzer = TrajectoryAnalyzer()
     analyzer.load_from_csv("trajectory.csv")
 
     calc = SpaceMetricsCalculator(analyzer)
@@ -164,7 +166,7 @@ if __name__ == "__main__":
     print("\n[猫] 高频格栅 Top-3 行为：")
     top_behaviors = calc.get_top_behaviors("cat", top_n=3)
     for flat_idx in top_cells:
-        gy, gx = divmod(int(flat_idx), 200)
+        gy, gx = divmod(int(flat_idx), analyzer.grid_width)
         behs = top_behaviors.get((gy, gx), [])
         print(f"  格栅({gx:3d},{gy:3d})  访问={int(cat_visits[gy, gx])}  Top3={behs}")
 

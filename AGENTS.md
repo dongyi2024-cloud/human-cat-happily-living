@@ -17,6 +17,7 @@
 ## 核心文件
 
 - `simulation_v9.py`：基础仿真引擎，包含户型图解析、人/猫 agent、tick 驱动与基础可视化。
+- `time_use_parameter_builder.py`、`config/human_profile_mapping.json`：人类时间利用画像参数生成与配置。
 - `trajectory_analyzer.py`：轨迹 CSV 导入导出、格栅化、行为频次字典、tick 级共现计数。
 - `metrics_calculator.py`：空间功能强度、行为熵、全状态/活跃共现密度、主导行为等指标。
 - `node_detector.py`：百分位阈值过滤、DBSCAN 聚类、节点分类。
@@ -44,6 +45,13 @@
 - 模块 D：多通道可视化仪表盘。
 
 后续可扩展方向包括参数敏感性分析、多户型对比实验、HTML 交互式报告、CI/CD 自动化分析流水线。
+
+## Agent 当前规则
+
+- 人类 agent 使用时间利用画像驱动，默认 `default_china`；职业/人群配置来自 `config/human_profile_mapping.json`，源数据来自 `data/`。
+- 人类外出状态记为 `outside`，不产生室内坐标；分析流程必须跳过外出 tick 的室内共现计算。
+- 猫 agent 使用档案 + 动态状态 + 空间语义的规则模型；默认成年猫休息目标按约 `14/24` 校准。
+- 猫预设包括 `sensitive_hiding`、`curious_active`、`friendly_companion`、`senior_arthritis`，修改行为权重时需保持档案差异可解释。
 
 ## 开发与验证
 

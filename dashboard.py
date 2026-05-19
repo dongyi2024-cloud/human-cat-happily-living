@@ -63,10 +63,11 @@ def _plot_heatmap(ax, matrix: np.ndarray, title: str, cmap: str, fig,
     _add_colorbar(fig, ax, cmap, 0, v, label)
 
 
-def _plot_node_symbols(ax, nodes: list[SpaceNode], grid_size: int, title: str) -> None:
+def _plot_node_symbols(ax, nodes: list[SpaceNode], grid_shape: tuple[int, int], title: str) -> None:
     """通道 5：节点分类符号图。"""
-    ax.set_xlim(0, grid_size)
-    ax.set_ylim(grid_size, 0)
+    grid_height, grid_width = grid_shape
+    ax.set_xlim(0, grid_width)
+    ax.set_ylim(grid_height, 0)
     ax.set_facecolor("#1a1a2e")
     ax.set_title(title, fontsize=11, fontweight="bold", pad=6)
     ax.axis("off")
@@ -149,8 +150,9 @@ def _plot_design_table(ax, nodes: list[SpaceNode]) -> None:
 def generate_dashboard(
     metrics: dict,
     nodes: list[SpaceNode],
-    grid_size: int = 200,
+    grid_size: int | None = None,
     output_path: str = "dashboard.png",
+    grid_shape: tuple[int, int] | None = None,
 ) -> None:
     """
     生成六通道 2×3 可视化仪表盘。
@@ -172,6 +174,9 @@ def generate_dashboard(
     human_int = metrics["human_intensity"]
     cat_ent = metrics["cat_entropy"]
     cooc_active = metrics["cooccurrence_active"]
+    if grid_shape is None:
+        grid_shape = (grid_size, grid_size) if grid_size is not None else cat_int.shape
+    grid_height, grid_width = grid_shape
 
     # [0,0] Cat intensity
     _plot_heatmap(axes[0, 0], cat_int, "Cat — Activity Intensity Heatmap", "YlOrRd", fig, label="Score S")
@@ -189,17 +194,17 @@ def generate_dashboard(
         _plot_heatmap(ax_cooc, cooc_active, "Active Co-occurrence (Conflict Points)",
                       "hot", fig, vmax=max(cooc_vmax, 1), label="Ticks")
     else:
-        ax_cooc.imshow(np.zeros((grid_size, grid_size)), cmap="hot",
+        ax_cooc.imshow(np.zeros(grid_shape), cmap="hot",
                        origin="upper", aspect="equal")
         ax_cooc.set_title("Active Co-occurrence\n(no active co-occurrence in this run)",
                           fontsize=11, fontweight="bold", pad=6)
         ax_cooc.axis("off")
-        ax_cooc.text(grid_size / 2, grid_size / 2,
+        ax_cooc.text(grid_width / 2, grid_height / 2,
                      "No active co-occurrence\n(separated activity zones)",
                      ha="center", va="center", fontsize=10, color="white", alpha=0.8)
 
     # [1,1] Node symbols
-    _plot_node_symbols(axes[1, 1], nodes, grid_size, "Spatial Node Classification")
+    _plot_node_symbols(axes[1, 1], nodes, grid_shape, "Spatial Node Classification")
 
     # [1,2] Design table
     _plot_design_table(axes[1, 2], nodes)
@@ -219,15 +224,15 @@ if __name__ == "__main__":
     print(" Module D — Visualization Dashboard Test")
     print("=" * 60)
 
-    analyzer = TrajectoryAnalyzer(grid_size=200)
+    analyzer = TrajectoryAnalyzer()
     analyzer.load_from_csv("trajectory.csv")
 
     calc = SpaceMetricsCalculator(analyzer)
     metrics = calc.compute_all()
 
     detector = NodeDetector(metrics, intensity_pct=80, cooc_pct=90,
-                            dbscan_eps=5, dbscan_min_samples=3)
+                            dbscan_eps=2, dbscan_min_samples=3)
     nodes = detector.detect()
 
-    generate_dashboard(metrics, nodes, grid_size=200, output_path="dashboard.png")
+    generate_dashboard(metrics, nodes, grid_shape=analyzer.grid_shape, output_path="dashboard.png")
     print("[Module D] Test complete")
