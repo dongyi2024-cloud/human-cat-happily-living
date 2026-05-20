@@ -202,15 +202,17 @@ if __name__ == "__main__":
     import sys, os
     sys.path.insert(0, os.path.dirname(__file__))
 
-    from trajectory_analyzer import TrajectoryAnalyzer
+    from trajectory_analyzer import build_analyzer_from_floor_plan
     from metrics_calculator import SpaceMetricsCalculator
 
     print("=" * 60)
     print(" 模块 C — 节点峰值检测与聚类 独立测试")
     print("=" * 60)
 
-    analyzer = TrajectoryAnalyzer()
-    analyzer.load_from_csv(os.path.join(os.path.dirname(__file__), "result", "trajectory.csv"))
+    result_dir = os.path.join(os.path.dirname(__file__), "result")
+    floor_plan_path = os.path.join(result_dir, "floor_plan.png")
+    analyzer = build_analyzer_from_floor_plan(floor_plan_path)
+    analyzer.load_from_csv(os.path.join(result_dir, "trajectory.csv"))
 
     calc = SpaceMetricsCalculator(analyzer)
     metrics = calc.compute_all()

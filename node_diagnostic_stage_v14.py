@@ -10,7 +10,7 @@ def main():
     parser.add_argument("--analysis-dir", default="result", help="轨迹与户型输入目录")
     parser.add_argument("--floor-plan", default=None, help="户型图路径，默认使用 analysis-dir/floor_plan.png")
     parser.add_argument("--trajectory-csv", default=None, help="轨迹 CSV 路径，默认使用 analysis-dir/trajectory.csv")
-    parser.add_argument("--ticks", type=int, default=1000, help="缺少轨迹时自动补跑模拟的 tick 数")
+    parser.add_argument("--ticks", type=int, default=1440, help="缺少轨迹时自动补跑模拟的 tick 数")
     parser.add_argument("--random-seed", type=int, default=7, help="自动补跑模拟的随机种子")
     args = parser.parse_args()
 

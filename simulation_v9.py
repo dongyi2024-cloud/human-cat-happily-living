@@ -17,7 +17,7 @@ from matplotlib import font_manager
 from matplotlib.image import imread
 from matplotlib.colors import LinearSegmentedColormap
 from PIL import Image
-from scipy.ndimage import gaussian_filter
+from scipy.ndimage import distance_transform_edt, gaussian_filter
 from heapq import heappush, heappop
 import random
 import csv
@@ -375,7 +375,7 @@ def generate_floor_plan(save_path="floor_plan.png", size=200):
 
 # ===================== 户型图解析器 =====================
 class FloorPlanParser:
-    def __init__(self, floor_plan_path, house_width_m=14.0, house_depth_m=16.5):
+    def __init__(self, floor_plan_path, house_width_m=16.5, house_depth_m=16.5):
         self.floor_plan_path = floor_plan_path
         self.house_width_m = house_width_m
         self.house_depth_m = house_depth_m
@@ -448,6 +448,10 @@ class PathFinder:
     def __init__(self, passable_map):
         self.passable_map = passable_map
         self.h, self.w = passable_map.shape
+        # 预先估计可通行像素到最近障碍的距离，用于给贴墙路径增加代价。
+        self.wall_clearance = distance_transform_edt(passable_map.astype(np.uint8))
+        self.preferred_clearance_px = 8.0
+        self.wall_penalty_scale = 0.12
 
     def find_path(self, start_x, start_y, goal_x, goal_y, use_internal=False):
         start = (int(start_y), int(start_x))
@@ -490,7 +494,7 @@ class PathFinder:
             if cur == goal: return self._reconstruct_path(came_from, cur)
             for nb in self._get_neighbors(cur):
                 if nb in visited: continue
-                tg = g_score[cur] + 1
+                tg = g_score[cur] + self._step_cost(cur, nb)
                 if nb not in g_score or tg < g_score[nb]:
                     came_from[nb] = cur
                     g_score[nb] = tg
@@ -509,13 +513,29 @@ class PathFinder:
 
     def _heuristic(self, a, b): return abs(a[0]-b[0]) + abs(a[1]-b[1])
 
+    def _step_cost(self, cur, nb):
+        dy = nb[0] - cur[0]
+        dx = nb[1] - cur[1]
+        base_cost = float(np.hypot(dy, dx))
+        clearance = float(self.wall_clearance[nb[0], nb[1]])
+        wall_penalty = max(0.0, self.preferred_clearance_px - clearance)
+        wall_penalty = (wall_penalty ** 2) * self.wall_penalty_scale
+        return base_cost + wall_penalty
+
     def _get_neighbors(self, pos):
         y, x = pos
         nbs = []
         for dy, dx in [(-1,0),(1,0),(0,-1),(0,1),(-1,-1),(-1,1),(1,-1),(1,1)]:
             ny, nx = y+dy, x+dx
-            if 0 <= ny < self.h and 0 <= nx < self.w and self.passable_map[ny, nx]:
-                nbs.append((ny, nx))
+            if not (0 <= ny < self.h and 0 <= nx < self.w):
+                continue
+            if not self.passable_map[ny, nx]:
+                continue
+            # 禁止沿墙角斜穿，避免路径贴着障碍切角。
+            if dx != 0 and dy != 0:
+                if not (self.passable_map[y, nx] and self.passable_map[ny, x]):
+                    continue
+            nbs.append((ny, nx))
         return nbs
 
     def _reconstruct_path(self, came_from, cur):
@@ -1440,7 +1460,7 @@ if __name__ == "__main__":
     # floor_plan = "你的户型图.png"
 
     # 步骤2：创建模拟（默认1000步，可改为5000步获得更精确结果）
-    sim = Simulation(floor_plan, total_ticks=1000, output_dir=result_dir)
+    sim = Simulation(floor_plan, total_ticks=1440, output_dir=result_dir)
 
     # 步骤3：运行模拟
     sim.run()
@@ -1457,7 +1477,12 @@ if __name__ == "__main__":
     plt.rcParams["font.family"] = "Noto Sans CJK JP"
     plt.rcParams['font.sans-serif'] = ['Noto Sans CJK JP', 'Noto Sans CJK SC', 'SimHei', 'Microsoft YaHei', 'Arial Unicode MS', 'DejaVu Sans']
 
-    analyzer = TrajectoryAnalyzer()
+    analyzer = TrajectoryAnalyzer(
+        house_width_m=sim.parser.house_width_m,
+        house_depth_m=sim.parser.house_depth_m,
+        source_width_px=sim.parser.img_width,
+        source_height_px=sim.parser.img_height,
+    )
     analyzer.load_from_records(sim.tick_records)
     analyzer.export_csv(os.path.join(result_dir, "trajectory.csv"))
     metrics = SpaceMetricsCalculator(analyzer).compute_all()

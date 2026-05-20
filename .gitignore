@@ -9,3 +9,4 @@ trajectory.csv
 !data/*.csv
 result/
 outputs/
+docs/

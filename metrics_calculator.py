@@ -9,7 +9,45 @@ SpaceMetricsCalculator — 基于 TrajectoryAnalyzer 提供的 tick 级别原始
 import numpy as np
 from scipy.stats import entropy as scipy_entropy
 
-from trajectory_analyzer import TrajectoryAnalyzer, BEHAVIOR_WEIGHTS, PASSIVE_BEHAVIORS
+from trajectory_analyzer import (
+    TrajectoryAnalyzer,
+    BEHAVIOR_WEIGHTS,
+    build_analyzer_from_floor_plan,
+    summarize_cat_behavior,
+)
+
+
+def compute_dcd_thresholds(nonzero_values: np.ndarray) -> dict[str, float]:
+    """统一 DCD 风险阈值，供节点分类和图例共用。"""
+    nonzero = np.asarray(nonzero_values, dtype=np.float32)
+    nonzero = nonzero[nonzero > 0]
+    if len(nonzero) >= 5:
+        p80 = float(np.percentile(nonzero, 80))
+        p60 = float(np.percentile(nonzero, 60))
+    elif len(nonzero):
+        max_value = float(nonzero.max())
+        p80 = max_value * 0.8
+        p60 = max_value * 0.5
+    else:
+        p80 = 0.0
+        p60 = 0.0
+    return {
+        "p60": p60,
+        "p80": p80,
+    }
+
+
+def classify_dcd_risk(value: float, thresholds: dict[str, float]) -> str:
+    """按统一阈值将 DCD 值映射为风险等级。"""
+    if value <= 0:
+        return "无风险"
+    p80 = float(thresholds.get("p80", 0.0))
+    p60 = float(thresholds.get("p60", 0.0))
+    if value >= p80 and p80 > 0:
+        return "高风险"
+    if value >= p60 and p60 > 0:
+        return "中风险"
+    return "低风险"
 
 
 class SpaceMetricsCalculator:
@@ -111,6 +149,58 @@ class SpaceMetricsCalculator:
                 mat[gy, gx] = max(behdict, key=behdict.get)
         return mat
 
+    def compute_dcd_matrix(self) -> np.ndarray:
+        """基于 tick 级轨迹计算动态冲突密度 DCD。"""
+        if self.analyzer.df is None:
+            raise RuntimeError("TrajectoryAnalyzer 尚未加载轨迹数据")
+
+        dcd = np.zeros(self.grid_shape, dtype=np.float32)
+        for row in self.analyzer.df.itertuples(index=False):
+            human_state = getattr(row, "human_state", "")
+            if human_state == "outside" or np.isnan(row.human_x) or np.isnan(row.human_y):
+                continue
+            if human_state not in {"moving", "wandering"}:
+                continue
+
+            cat_behavior_group = getattr(row, "cat_behavior_group", None)
+            if cat_behavior_group is None or str(cat_behavior_group).strip() == "":
+                cat_behavior_group = summarize_cat_behavior(row.cat_behavior)
+            if cat_behavior_group != "玩耍":
+                continue
+
+            cat_cell = self.analyzer._to_grid(row.cat_x, row.cat_y)
+            human_cell = self.analyzer._to_grid(row.human_x, row.human_y)
+            dist_m = self.analyzer._grid_distance_m(cat_cell, human_cell)
+            if dist_m > self.analyzer.proximity_m:
+                continue
+
+            cat_vx = getattr(row, "cat_vx_m_per_tick", np.nan)
+            cat_vy = getattr(row, "cat_vy_m_per_tick", np.nan)
+            human_vx = getattr(row, "human_vx_m_per_tick", np.nan)
+            human_vy = getattr(row, "human_vy_m_per_tick", np.nan)
+            if any(np.isnan(v) for v in [cat_vx, cat_vy, human_vx, human_vy]):
+                continue
+
+            cat_speed = float(np.hypot(cat_vx, cat_vy))
+            human_speed = float(np.hypot(human_vx, human_vy))
+            if cat_speed <= 1e-8 or human_speed <= 1e-8:
+                continue
+
+            cos_angle = (cat_vx * human_vx + cat_vy * human_vy) / (cat_speed * human_speed)
+            cos_angle = float(np.clip(cos_angle, -1.0, 1.0))
+            angle_deg = float(np.degrees(np.arccos(cos_angle)))
+            if angle_deg >= 90.0:
+                continue
+
+            distance_weight = max(0.1, 1.0 - dist_m / max(self.analyzer.proximity_m, 1e-8))
+            speed_weight = max(1.0, (cat_speed + human_speed) * 0.5)
+            weight = distance_weight * speed_weight
+            dcd[cat_cell] += weight
+            if human_cell != cat_cell:
+                dcd[human_cell] += weight * 0.5
+
+        return dcd
+
     # ------------------------------------------------------------------
     # 汇总接口：一次性计算所有指标
     # ------------------------------------------------------------------
@@ -123,6 +213,9 @@ class SpaceMetricsCalculator:
         human_entropy = self.compute_entropy("human")
         cooc_all = self.get_cooccurrence_all()
         cooc_active = self.get_cooccurrence_active()
+        dominant_behavior = self.get_dominant_behavior_matrix("cat")
+        dcd_matrix = self.compute_dcd_matrix()
+        dcd_thresholds = compute_dcd_thresholds(dcd_matrix[dcd_matrix > 0])
 
         print("[模块B] 五维指标计算完成")
         print(f"  猫强度  — 最大值: {cat_intensity.max():.1f}  非零格栅: {np.count_nonzero(cat_intensity)}")
@@ -135,6 +228,7 @@ class SpaceMetricsCalculator:
         print(f"  人熵    — 最大值: {human_entropy.max():.3f}  均值(非零): {human_ent_mean:.3f}")
         print(f"  全状态共现 — 总计: {int(cooc_all.sum())}  峰值: {int(cooc_all.max())}")
         print(f"  活跃共现   — 总计: {int(cooc_active.sum())}  峰值: {int(cooc_active.max())}")
+        print(f"  DCD 动态冲突 — 峰值: {float(dcd_matrix.max()):.3f}  P60: {dcd_thresholds['p60']:.3f}  P80: {dcd_thresholds['p80']:.3f}")
 
         return {
             "cat_intensity": cat_intensity,
@@ -143,6 +237,9 @@ class SpaceMetricsCalculator:
             "human_entropy": human_entropy,
             "cooccurrence_all": cooc_all,
             "cooccurrence_active": cooc_active,
+            "dominant_behavior": dominant_behavior,
+            "dcd_matrix": dcd_matrix,
+            "dcd_thresholds": dcd_thresholds,
         }
 
 
@@ -155,8 +252,10 @@ if __name__ == "__main__":
     print(" 模块 B — 五维评价指标算法 独立测试")
     print("=" * 60)
 
-    analyzer = TrajectoryAnalyzer()
-    analyzer.load_from_csv(os.path.join(os.path.dirname(__file__), "result", "trajectory.csv"))
+    result_dir = os.path.join(os.path.dirname(__file__), "result")
+    floor_plan_path = os.path.join(result_dir, "floor_plan.png")
+    analyzer = build_analyzer_from_floor_plan(floor_plan_path)
+    analyzer.load_from_csv(os.path.join(result_dir, "trajectory.csv"))
 
     calc = SpaceMetricsCalculator(analyzer)
     metrics = calc.compute_all()
