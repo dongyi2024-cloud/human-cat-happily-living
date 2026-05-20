@@ -16,6 +16,8 @@ from trajectory_analyzer import (
     summarize_cat_behavior,
 )
 
+CAT_DCD_ACTIVE_BEHAVIORS = {"奔跑", "探索", "玩耍"}
+
 
 def compute_dcd_thresholds(nonzero_values: np.ndarray) -> dict[str, float]:
     """统一 DCD 风险阈值，供节点分类和图例共用。"""
@@ -165,7 +167,7 @@ class SpaceMetricsCalculator:
             cat_behavior_group = getattr(row, "cat_behavior_group", None)
             if cat_behavior_group is None or str(cat_behavior_group).strip() == "":
                 cat_behavior_group = summarize_cat_behavior(row.cat_behavior)
-            if cat_behavior_group != "玩耍":
+            if cat_behavior_group not in CAT_DCD_ACTIVE_BEHAVIORS:
                 continue
 
             cat_cell = self.analyzer._to_grid(row.cat_x, row.cat_y)

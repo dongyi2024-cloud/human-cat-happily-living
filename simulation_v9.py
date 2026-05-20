@@ -79,7 +79,6 @@ def _cat_function_type(behavior):
         "奔跑": "运动型",
         "玩耍": "玩耍型",
         "探索": "探索型",
-        "游走": "玩耍型",
         "躲藏": "庇护型",
         "观察": "观察型",
         "观望": "观察型",
@@ -88,6 +87,7 @@ def _cat_function_type(behavior):
         "进食": "进食型",
         "抓挠": "抓挠型",
         "占位": "抓挠型",
+        "亲近": "玩耍型",
     }.get(behavior, "探索型")
 
 
@@ -214,20 +214,21 @@ CAT_BEHAVIOR_LABELS = {
     "rest": "休息",
     "feed": "进食",
     "explore": "探索",
-    "watch_window": "观望",
+    "watch_window": "观察",
     "hide": "躲藏",
     "run": "奔跑",
-    "wander": "游走",
-    "claim_spot": "占位",
-    "approach_human": "亲近",
+    "wander": "玩耍",
+    "claim_spot": "抓挠",
+    "approach_human": "玩耍",
 }
 
-# 临时归纳层：
-# - 玩耍：把动态行为合并到同一语义桶，便于后续分析和 PRD 阶段性适配
-# - 抓挠：先映射到占位，后续如需新增独立行为再拆分
-# - 观察：直接映射到当前的观望
+# 输出层 canonical 行为：
+# - 观望 -> 观察
+# - 占位 -> 抓挠
+# - 游走 / 亲近 -> 玩耍
+# 这样最终暴露给分析和可视化的是稳定的八类行为。
 CAT_BEHAVIOR_GROUP_LABELS = {
-    "玩耍": {"奔跑", "探索", "游走"},
+    "玩耍": {"游走", "亲近"},
     "抓挠": {"占位"},
     "观察": {"观望"},
 }
@@ -240,6 +241,7 @@ CAT_BEHAVIOR_GROUP_LOOKUP = {
 
 def summarize_cat_behavior(label):
     return CAT_BEHAVIOR_GROUP_LOOKUP.get(label, label)
+
 
 DEFAULT_CAT_PROFILE = {
     "name": "default_adult",
@@ -575,9 +577,10 @@ class CatAgent:
         self.steps_since_goal_change = 0
         self.is_running = False
         self.run_steps_remaining = 0
+        self.hide_hold_remaining = 0
         self.current_behavior = "wander"
-        # 成年猫通常每天休息约 12-16 小时；默认以 14/24 作为日周期校准目标。
-        self.rest_drive = 14.0 / 24.0
+        # 休息驱动初值与年龄目标保持一致，避免默认成人基线把日内分布拉回旧值。
+        self.rest_drive = self._rest_target_ratio()
         self.zone_stay_ticks = {}
         self.behavior_counts = {}
         self.behavior_group_counts = {}
@@ -632,10 +635,14 @@ class CatAgent:
     def _rest_target_ratio(self):
         age = self.objective["age_stage"]
         if age == "kitten":
-            return 16.0 / 24.0
+            return 0.33
+        if age == "young":
+            return 0.35
+        if age == "adult":
+            return 0.37
         if age == "senior":
-            return 17.0 / 24.0
-        return 14.0 / 24.0
+            return 0.42
+        return 0.37
 
     def _disease_modifiers(self):
         diseases = set(self.objective.get("disease_history", []))
@@ -676,13 +683,13 @@ class CatAgent:
 
         weights = {
             "rest": 6.00 + self.rest_drive * 12.00 + (1.0 - s["energy"]) * 2.0 + s["stress"] * 0.70,
-            "feed": 0.18 + s["hunger"] * 1.60,
-            "explore": 0.35 + p["extraversion"] * 1.35 + s["boredom"] * 1.35,
+            "feed": 0.18 + s["hunger"] * 3.05,
+            "explore": 0.48 + p["extraversion"] * 1.45 + s["boredom"] * 1.45,
             "watch_window": 0.25 + p["extraversion"] * 0.65 + s["boredom"] * 0.60,
-            "hide": 0.25 + p["neuroticism"] * 1.55 + s["stress"] * 1.60 + (1.0 - s["security"]) * 1.10,
+            "hide": 0.28 + p["neuroticism"] * 1.45 + s["stress"] * 1.55 + (1.0 - s["security"]) * 1.05,
             "run": 0.08 + p["impulsiveness"] * 0.70 + p["extraversion"] * 0.45 + s["boredom"] * 0.30,
-            "wander": 0.60 + (1.0 - abs(s["hunger"] - 0.45)) * 0.35,
-            "claim_spot": 0.20 + p["dominance"] * 1.25,
+            "wander": 0.90 + (1.0 - abs(s["hunger"] - 0.45)) * 0.45,
+            "claim_spot": 0.08 + p["dominance"] * 0.75,
             "approach_human": 0.15 + p["agreeableness"] * 1.55 + s["social_need"] * 1.10 - p["neuroticism"] * 0.45,
         }
 
@@ -690,15 +697,17 @@ class CatAgent:
             weights["claim_spot"] += 0.55 + p["dominance"] * 0.50
             weights["wander"] += 0.20
         if cur_zone == "cat_feeding":
-            weights["feed"] += 0.75
+            weights["feed"] += 0.55
         if cur_zone == "cat_rest":
             weights["rest"] += 0.55
-            weights["hide"] += 0.35
+            weights["hide"] += 0.52 + s["security"] * 0.45 + (1.0 - s["stress"]) * 0.20
         if cur_zone == "window":
             weights["watch_window"] += 0.65
         if cur_zone in {"human_sleep", "human_work", "shared"}:
             weights["approach_human"] += p["agreeableness"] * 0.45
             weights["hide"] += p["neuroticism"] * 0.25
+        if self.current_behavior == "hide":
+            weights["hide"] += 0.28 + s["security"] * 0.32 + (1.0 - s["stress"]) * 0.18
 
         weights["rest"] *= age_mod["rest"] * disease_mod["rest"]
         weights["explore"] *= age_mod["explore"] * disease_mod["explore"]
@@ -718,7 +727,7 @@ class CatAgent:
             "feed": ["cat_feeding"],
             "explore": ["empty", "shared", "window", "human_work"],
             "watch_window": ["window"],
-            "hide": ["cat_rest", "human_sleep", "empty"],
+            "hide": ["cat_rest"],
             "run": ["empty", "shared"],
             "wander": ["empty", "shared", "window", "cat_rest"],
             "claim_spot": ["cat_rest", "window", "shared", "cat_feeding"],
@@ -738,8 +747,10 @@ class CatAgent:
         else:
             self.current_behavior = weighted_random_choice(self.calculate_behavior_weights())
         targets = self.behavior_to_zones(self.current_behavior)
+        allow_same_zone = self.current_behavior == "hide"
         for tz in targets:
-            if tz == cur_zone: continue
+            if tz == cur_zone and not allow_same_zone:
+                continue
             zc = np.where(self.zone_map == tz)
             if len(zc[0]) > 5:
                 idx = random.randint(0, len(zc[0])-1)
@@ -785,6 +796,11 @@ class CatAgent:
         return clamp(prob, 0.0, 0.18)
 
     def move(self):
+        if self.hide_hold_remaining > 0 and self.current_behavior == "hide":
+            self.hide_hold_remaining -= 1
+            self.trajectory.append((self.x, self.y))
+            self._add_heatmap(int(self.y), int(self.x), CAT_CONFIG["heatmap_weight"])
+            return
         if self.goal_x is None: self.choose_new_goal(); return
         dx, dy = self.goal_x - self.x, self.goal_y - self.y
         dist = np.sqrt(dx*dx + dy*dy)
@@ -829,7 +845,7 @@ class CatAgent:
         elif cz == "cat_feeding":
             self.energy = self.energy + CAT_CONFIG["feed_energy_recover"]
             self.satisfaction = self.satisfaction + 0.03
-            self.state["hunger"] = clamp(self.state["hunger"] - 0.35)
+            self.state["hunger"] = clamp(self.state["hunger"] - 0.18)
         elif cz == "window":
             self.satisfaction = self.satisfaction + 0.02
             self.state["boredom"] = clamp(self.state["boredom"] - 0.06)
@@ -838,8 +854,11 @@ class CatAgent:
             self.state["social_need"] = clamp(self.state["social_need"] - 0.04)
 
         if self.current_behavior == "hide":
-            self.state["security"] = clamp(self.state["security"] + 0.04)
-            self.state["stress"] = clamp(self.state["stress"] - 0.04)
+            self.state["security"] = clamp(self.state["security"] + 0.06)
+            self.state["stress"] = clamp(self.state["stress"] - 0.08)
+            self.satisfaction = self.satisfaction + 0.02
+            if cz == "cat_rest":
+                self.hide_hold_remaining = max(self.hide_hold_remaining, random.randint(8, 20))
         elif self.current_behavior in {"explore", "run", "wander"}:
             self.state["boredom"] = clamp(self.state["boredom"] - 0.04)
         elif self.current_behavior == "approach_human":
@@ -859,8 +878,13 @@ class CatAgent:
         cz = self.get_zone()
 
         self.energy = self.energy - CAT_CONFIG["energy_consume_per_tick"] * (1.8 if self.is_running else 1.0)
-        self.state["hunger"] = clamp(self.state["hunger"] + 0.00045)
-        self.state["boredom"] = clamp(self.state["boredom"] + 0.00035 + (0.00025 if self.current_behavior in {"rest", "hide"} else 0.0))
+        self.state["hunger"] = clamp(self.state["hunger"] + 0.00075)
+        boredom_delta = 0.00035
+        if self.current_behavior == "rest":
+            boredom_delta += 0.00025
+        elif self.current_behavior == "hide":
+            boredom_delta += 0.00015
+        self.state["boredom"] = clamp(self.state["boredom"] + boredom_delta)
         self.state["social_need"] = clamp(self.state["social_need"] + 0.00025 * p["agreeableness"])
 
         stress_delta = 0.00020 * p["neuroticism"]
@@ -868,13 +892,17 @@ class CatAgent:
             stress_delta += 0.00022 * p["neuroticism"]
         if cz in {"cat_rest", "window"}:
             stress_delta -= 0.00030
+        if self.current_behavior == "hide":
+            stress_delta -= 0.00020
         self.state["stress"] = clamp(self.state["stress"] + stress_delta)
 
         security_delta = -0.00015 * p["neuroticism"]
         if cz == "cat_rest":
-            security_delta += 0.00045
+            security_delta += 0.00018
         elif cz in {"shared", "human_work"}:
             security_delta -= 0.00018
+        if self.current_behavior == "hide":
+            security_delta += 0.00060
         self.state["security"] = clamp(self.state["security"] + security_delta)
 
         sat_delta = (self.state["security"] - self.state["stress"]) * 0.00025 * disease_mod["satisfaction"]

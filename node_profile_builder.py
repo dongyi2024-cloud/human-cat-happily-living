@@ -130,7 +130,7 @@ def _infer_strategy_type(node_kind: str, risk_level: str, function_type: str) ->
     if node_kind == CAT_NODE_KIND:
         if function_type in {"休息", "睡眠", "躲藏", "进食"}:
             return "健康优化"
-        if function_type in {"玩耍", "探索", "观察", "抓挠", "亲近", "游走", "奔跑"}:
+        if function_type in {"玩耍", "探索", "观察", "抓挠", "奔跑"}:
             return "功能补充"
         return "健康优化"
     return None
