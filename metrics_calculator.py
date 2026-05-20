@@ -7,6 +7,7 @@ SpaceMetricsCalculator — 基于 TrajectoryAnalyzer 提供的 tick 级别原始
 """
 
 import numpy as np
+from scipy.spatial import cKDTree
 from scipy.stats import entropy as scipy_entropy
 
 from trajectory_analyzer import (
@@ -17,6 +18,8 @@ from trajectory_analyzer import (
 )
 
 CAT_DCD_ACTIVE_BEHAVIORS = {"奔跑", "探索", "玩耍"}
+DCD_BASE_PROXIMITY_M = 12.0 * 0.0825
+DCD_ANGLE_PROXIMITY_M = 15.0 * 0.0825
 
 
 def compute_dcd_thresholds(nonzero_values: np.ndarray) -> dict[str, float]:
@@ -50,6 +53,11 @@ def classify_dcd_risk(value: float, thresholds: dict[str, float]) -> str:
     if value >= p60 and p60 > 0:
         return "中风险"
     return "低风险"
+
+
+def is_human_dynamic_state(human_state: str) -> bool:
+    """安全事件中的人侧动态条件。"""
+    return human_state in {"moving", "wandering"}
 
 
 class SpaceMetricsCalculator:
@@ -151,55 +159,96 @@ class SpaceMetricsCalculator:
                 mat[gy, gx] = max(behdict, key=behdict.get)
         return mat
 
+    def _passes_dcd_three_layer_filter(self, row) -> tuple[bool, tuple[int, int] | None, tuple[int, int] | None, float]:
+        """
+        DCD 三层过滤：
+        1. 动态位移：人处于移动态，猫处于 {奔跑, 探索, 玩耍}
+        2. 空间重叠：同一 tick 人猫物理距离 <= 角度增强半径
+        3. 路径交叉：速度向量夹角 < 90 度
+        """
+        human_state = getattr(row, "human_state", "")
+        if human_state == "outside" or np.isnan(row.human_x) or np.isnan(row.human_y):
+            return False, None, None, np.nan
+        if not is_human_dynamic_state(human_state):
+            return False, None, None, np.nan
+
+        cat_behavior_group = getattr(row, "cat_behavior_group", None)
+        if cat_behavior_group is None or str(cat_behavior_group).strip() == "":
+            cat_behavior_group = summarize_cat_behavior(row.cat_behavior)
+        if cat_behavior_group not in CAT_DCD_ACTIVE_BEHAVIORS:
+            return False, None, None, np.nan
+
+        cat_cell = self.analyzer._to_grid(row.cat_x, row.cat_y)
+        human_cell = self.analyzer._to_grid(row.human_x, row.human_y)
+        dist_m = self.analyzer._grid_distance_m(cat_cell, human_cell)
+        if dist_m > DCD_ANGLE_PROXIMITY_M:
+            return False, cat_cell, human_cell, dist_m
+
+        cat_vx = getattr(row, "cat_vx_m_per_tick", np.nan)
+        cat_vy = getattr(row, "cat_vy_m_per_tick", np.nan)
+        human_vx = getattr(row, "human_vx_m_per_tick", np.nan)
+        human_vy = getattr(row, "human_vy_m_per_tick", np.nan)
+        if any(np.isnan(v) for v in (cat_vx, cat_vy, human_vx, human_vy)):
+            return False, cat_cell, human_cell, dist_m
+
+        cat_speed = float(np.hypot(cat_vx, cat_vy))
+        human_speed = float(np.hypot(human_vx, human_vy))
+        if cat_speed <= 1e-8 or human_speed <= 1e-8:
+            return False, cat_cell, human_cell, dist_m
+
+        cos_angle = (cat_vx * human_vx + cat_vy * human_vy) / (cat_speed * human_speed)
+        cos_angle = float(np.clip(cos_angle, -1.0, 1.0))
+        angle_deg = float(np.degrees(np.arccos(cos_angle)))
+        if angle_deg >= 90.0:
+            return False, cat_cell, human_cell, dist_m
+        return True, cat_cell, human_cell, dist_m
+
     def compute_dcd_matrix(self) -> np.ndarray:
-        """基于 tick 级轨迹计算动态冲突密度 DCD。"""
+        """基于两段式近邻层 + 角度增强层计算动态冲突密度 DCD。"""
         if self.analyzer.df is None:
             raise RuntimeError("TrajectoryAnalyzer 尚未加载轨迹数据")
 
         dcd = np.zeros(self.grid_shape, dtype=np.float32)
+        human_dynamic_cells: list[tuple[int, int]] = []
+        cat_dynamic_cells: list[tuple[int, int]] = []
+
         for row in self.analyzer.df.itertuples(index=False):
             human_state = getattr(row, "human_state", "")
-            if human_state == "outside" or np.isnan(row.human_x) or np.isnan(row.human_y):
-                continue
-            if human_state not in {"moving", "wandering"}:
-                continue
+            human_inside = (
+                human_state != "outside"
+                and not np.isnan(row.human_x)
+                and not np.isnan(row.human_y)
+            )
+            if human_inside and is_human_dynamic_state(human_state):
+                human_dynamic_cells.append(self.analyzer._to_grid(row.human_x, row.human_y))
 
             cat_behavior_group = getattr(row, "cat_behavior_group", None)
             if cat_behavior_group is None or str(cat_behavior_group).strip() == "":
                 cat_behavior_group = summarize_cat_behavior(row.cat_behavior)
-            if cat_behavior_group not in CAT_DCD_ACTIVE_BEHAVIORS:
-                continue
+            if cat_behavior_group in CAT_DCD_ACTIVE_BEHAVIORS:
+                cat_dynamic_cells.append(self.analyzer._to_grid(row.cat_x, row.cat_y))
 
-            cat_cell = self.analyzer._to_grid(row.cat_x, row.cat_y)
-            human_cell = self.analyzer._to_grid(row.human_x, row.human_y)
-            dist_m = self.analyzer._grid_distance_m(cat_cell, human_cell)
-            if dist_m > self.analyzer.proximity_m:
-                continue
+        if human_dynamic_cells and cat_dynamic_cells:
+            cat_points = np.array(cat_dynamic_cells, dtype=float)
+            cat_tree = cKDTree(cat_points)
+            cell_radius = DCD_BASE_PROXIMITY_M / max(self.analyzer.cell_size_m, 1e-8)
+            for human_cell in human_dynamic_cells:
+                neighbor_indices = cat_tree.query_ball_point(human_cell, cell_radius)
+                for idx in neighbor_indices:
+                    cat_cell_arr = cat_points[idx]
+                    cat_cell = (int(cat_cell_arr[0]), int(cat_cell_arr[1]))
+                    dist_m = self.analyzer._grid_distance_m(human_cell, cat_cell)
+                    if dist_m > DCD_BASE_PROXIMITY_M:
+                        continue
+                    weight = max(0.0, 1.0 - dist_m / max(DCD_BASE_PROXIMITY_M, 1e-8)) * 0.4
+                    dcd[human_cell] += weight
+                    dcd[cat_cell] += weight * 0.4
 
-            cat_vx = getattr(row, "cat_vx_m_per_tick", np.nan)
-            cat_vy = getattr(row, "cat_vy_m_per_tick", np.nan)
-            human_vx = getattr(row, "human_vx_m_per_tick", np.nan)
-            human_vy = getattr(row, "human_vy_m_per_tick", np.nan)
-            if any(np.isnan(v) for v in [cat_vx, cat_vy, human_vx, human_vy]):
+        for row in self.analyzer.df.itertuples(index=False):
+            passed, cat_cell, _, _ = self._passes_dcd_three_layer_filter(row)
+            if not passed or cat_cell is None:
                 continue
-
-            cat_speed = float(np.hypot(cat_vx, cat_vy))
-            human_speed = float(np.hypot(human_vx, human_vy))
-            if cat_speed <= 1e-8 or human_speed <= 1e-8:
-                continue
-
-            cos_angle = (cat_vx * human_vx + cat_vy * human_vy) / (cat_speed * human_speed)
-            cos_angle = float(np.clip(cos_angle, -1.0, 1.0))
-            angle_deg = float(np.degrees(np.arccos(cos_angle)))
-            if angle_deg >= 90.0:
-                continue
-
-            distance_weight = max(0.1, 1.0 - dist_m / max(self.analyzer.proximity_m, 1e-8))
-            speed_weight = max(1.0, (cat_speed + human_speed) * 0.5)
-            weight = distance_weight * speed_weight
-            dcd[cat_cell] += weight
-            if human_cell != cat_cell:
-                dcd[human_cell] += weight * 0.5
+            dcd[cat_cell] += 2.0
 
         return dcd
 

@@ -506,7 +506,9 @@ def render_grid_stage(ctx: VisualizationContext, output_dir: str) -> list[str]:
         for gy, gx in zip(*np.where(passable)):
             if float(cat_intensity[gy, gx]) < threshold:
                 continue
-            behavior = dominant_behavior[gy, gx] or "休息"
+            behavior = dominant_behavior[gy, gx]
+            if not behavior:
+                continue
             canvas.draw_cell(ax, gy, gx, BEHAVIOR_COLORS.get(behavior, "#A9A9A9"), alpha=0.82, edgecolor="white", lw=0.45)
             canvas.draw_text(ax, gy, gx, behavior_abbr(behavior), size=8)
 
