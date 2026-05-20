@@ -22,6 +22,7 @@ from node_profile_builder import (
     build_node_profiles,
     extract_cat_clusters,
 )
+from project_paths import ensure_project_dir, resolve_project_path
 from simulation_v9 import (
     CAT_BEHAVIOR_LABELS,
     CAT_CONFIG,
@@ -428,10 +429,10 @@ def _default_paths(output_dir: str) -> tuple[str, str]:
 
 
 def ensure_analysis_inputs(output_dir: str, floor_plan_path: str | None = None, trajectory_csv: str | None = None, total_ticks: int = 1440, random_seed: int | None = 7) -> tuple[str, str]:
-    os.makedirs(output_dir, exist_ok=True)
+    output_dir = str(ensure_project_dir(output_dir))
     default_floor_plan, default_trajectory = _default_paths(output_dir)
-    floor_plan_path = floor_plan_path or default_floor_plan
-    trajectory_csv = trajectory_csv or default_trajectory
+    floor_plan_path = str(resolve_project_path(floor_plan_path or default_floor_plan))
+    trajectory_csv = str(resolve_project_path(trajectory_csv or default_trajectory))
     if os.path.exists(floor_plan_path) and os.path.exists(trajectory_csv):
         return floor_plan_path, trajectory_csv
 
@@ -475,7 +476,7 @@ def build_context(output_dir: str = "result", floor_plan_path: str | None = None
 
 
 def render_grid_stage(ctx: VisualizationContext, output_dir: str) -> list[str]:
-    os.makedirs(output_dir, exist_ok=True)
+    output_dir = str(ensure_project_dir(output_dir))
     canvas = GridCanvas(ctx.zone_map, ctx.passable_map, ctx.analyzer)
     cat_intensity = ctx.metrics["cat_intensity"]
     cat_entropy = ctx.metrics["cat_entropy"]
@@ -592,7 +593,7 @@ def render_grid_stage(ctx: VisualizationContext, output_dir: str) -> list[str]:
 
 
 def render_node_stage(ctx: VisualizationContext, output_dir: str) -> list[str]:
-    os.makedirs(output_dir, exist_ok=True)
+    output_dir = str(ensure_project_dir(output_dir))
     canvas = GridCanvas(ctx.zone_map, ctx.passable_map, ctx.analyzer)
     profiles = sorted(ctx.node_profiles, key=lambda item: item.cfs, reverse=True)
     cat_profiles = [profile for profile in profiles if profile.node_kind == CAT_NODE_KIND]

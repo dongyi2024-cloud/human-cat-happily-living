@@ -1,0 +1,47 @@
+{
+  "profile_name": "default_adult",
+  "total_ticks": 10,
+  "zone_stay_ticks": {
+    "empty": 10
+  },
+  "behavior_counts": {
+    "休息": 10
+  },
+  "behavior_group_counts": {
+    "休息": 10
+  },
+  "behavior_durations": {
+    "休息": 10
+  },
+  "behavior_group_durations": {
+    "休息": 10
+  },
+  "behavior_group_mapping": {
+    "抓挠": [
+      "占位"
+    ],
+    "玩耍": [
+      "奔跑",
+      "探索",
+      "游走"
+    ],
+    "观察": [
+      "观望"
+    ]
+  },
+  "dynamic_behavior_set": [
+    "奔跑",
+    "探索",
+    "游走"
+  ],
+  "final_state": {
+    "energy": 0.999,
+    "satisfaction": 0.5004,
+    "hunger": 0.2545,
+    "stress": 0.326,
+    "boredom": 0.356,
+    "security": 0.5742,
+    "social_need": 0.4512
+  },
+  "random_seed": 7
+}

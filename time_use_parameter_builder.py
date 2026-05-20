@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import csv
 import json
-import os
 from copy import deepcopy
+from pathlib import Path
 from typing import Any
+
+from project_paths import resolve_project_path
 
 
 ACTIVITY_TO_ZONE_MAP_VERSION = "ACTIVITY_TO_ZONE_MAP_v1"
@@ -44,11 +46,11 @@ class TimeUseParameterBuilder:
         tick_minutes: float = 1.0,
         total_ticks: int = 1440,
     ):
-        self.data_dir = data_dir
-        self.mapping_path = mapping_path
+        self.data_dir = resolve_project_path(data_dir)
+        self.mapping_path = resolve_project_path(mapping_path)
         self.tick_minutes = float(tick_minutes)
         self.total_ticks = int(total_ticks)
-        self.profile_mapping = self._load_mapping(mapping_path)
+        self.profile_mapping = self._load_mapping(self.mapping_path)
         self.source_tables: dict[str, list[dict[str, str]]] = {}
         self.last_profile: dict[str, Any] | None = None
         self.last_source_metadata: dict[str, Any] | None = None
@@ -107,10 +109,10 @@ class TimeUseParameterBuilder:
     def load_source_tables(self, raw_files: list[str]) -> dict[str, list[dict[str, str]]]:
         loaded = {}
         for raw_file in raw_files:
-            path = os.path.join(self.data_dir, raw_file)
-            if not os.path.exists(path):
+            path = Path(self.data_dir) / raw_file
+            if not path.exists():
                 raise FileNotFoundError(f"缺少时间利用数据文件: {path}")
-            with open(path, newline="", encoding="utf-8") as f:
+            with path.open(newline="", encoding="utf-8") as f:
                 loaded[raw_file] = list(csv.DictReader(f))
         self.source_tables.update(loaded)
         return loaded
@@ -303,13 +305,14 @@ class TimeUseParameterBuilder:
         if mapping["profile_status"] != "data_supported" and mapping.get("paper_ready"):
             raise ValueError(f"画像 {profile_id} 缺少数据支撑，不能标记为 paper_ready")
         for raw_file in mapping["raw_files"]:
-            if not os.path.exists(os.path.join(self.data_dir, raw_file)):
+            if not (Path(self.data_dir) / raw_file).exists():
                 raise FileNotFoundError(f"画像 {profile_id} 缺少源数据文件: {raw_file}")
 
-    def _load_mapping(self, mapping_path: str) -> dict:
-        if not os.path.exists(mapping_path):
+    def _load_mapping(self, mapping_path: str | Path) -> dict:
+        mapping_path = Path(mapping_path)
+        if not mapping_path.exists():
             raise FileNotFoundError(f"缺少人类画像映射文件: {mapping_path}")
-        with open(mapping_path, encoding="utf-8") as f:
+        with mapping_path.open(encoding="utf-8") as f:
             return json.load(f)
 
     def _rows_by_category(self, raw_file: str, categories: list[str]) -> list[dict[str, str]]:

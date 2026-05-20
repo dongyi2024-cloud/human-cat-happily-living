@@ -1,0 +1,41 @@
+{
+  "profile_id": "default_china",
+  "display_name": "中国居民基准画像",
+  "total_ticks": 10,
+  "human_zone_stay_ticks": {
+    "human_work": 10
+  },
+  "human_activity_ticks": {
+    "home_work": 2,
+    "household": 1,
+    "leisure": 2,
+    "sleep": 5
+  },
+  "behavior_counts": {
+    "休闲": 2,
+    "家务": 1,
+    "居家工作": 2,
+    "睡眠": 5
+  },
+  "outside_ticks": 0,
+  "final_state": {
+    "human_state": "moving",
+    "human_zone": "human_work",
+    "current_activity": "sleep",
+    "satisfaction": 0.5
+  },
+  "human_profile_summary": {
+    "profile_id": "default_china",
+    "display_name": "中国居民基准画像",
+    "source_dataset": "China_Time_Use_2018",
+    "source_tables": [
+      "2018 China Time Use Survey Bulletin"
+    ],
+    "occupation_categories": [
+      "overall_residents"
+    ],
+    "tick_minutes": 1.0,
+    "normalization_applied": true
+  },
+  "random_seed": 7
+}

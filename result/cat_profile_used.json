@@ -1,0 +1,20 @@
+{
+  "name": "default_adult",
+  "objective": {
+    "age_stage": "adult",
+    "sex": "unknown",
+    "neutered": true,
+    "body_condition": "normal",
+    "mobility_level": 1.0,
+    "vision_level": 1.0,
+    "hearing_level": 1.0,
+    "disease_history": []
+  },
+  "personality": {
+    "neuroticism": 0.5,
+    "extraversion": 0.5,
+    "dominance": 0.5,
+    "impulsiveness": 0.5,
+    "agreeableness": 0.5
+  }
+}

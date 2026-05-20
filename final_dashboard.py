@@ -7,6 +7,7 @@ import matplotlib.patches as mpatches
 import numpy as np
 
 from node_profile_builder import CAT_NODE_KIND, COEXIST_NODE_KIND
+from project_paths import resolve_project_path
 from visual_config import (
     NODE_KIND_COLORS,
     RISK_COLORS,
@@ -34,6 +35,7 @@ def elevate_legend(legend) -> None:
 
 
 def render_final_dashboard(ctx: VisualizationContext, output_path: str) -> str:
+    output_path = str(resolve_project_path(output_path))
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     canvas = GridCanvas(ctx.zone_map, ctx.passable_map, ctx.analyzer)
     profiles = sorted(ctx.node_profiles, key=lambda item: item.cfs, reverse=True)

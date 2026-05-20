@@ -1,0 +1,103 @@
+{
+  "profile_id": "default_china",
+  "display_name": "中国居民基准画像",
+  "source": {
+    "dataset": "China_Time_Use_2018",
+    "tables": [
+      "2018 China Time Use Survey Bulletin"
+    ],
+    "raw_files": [
+      "china_time_use_2018.csv"
+    ],
+    "occupation_categories": [
+      "overall_residents"
+    ],
+    "day_type": "average_day"
+  },
+  "derived_activity_budget": {
+    "sleep": 5,
+    "home_work": 2,
+    "outside": 0,
+    "household": 1,
+    "care": 0,
+    "leisure": 2,
+    "education": 0
+  },
+  "zone_budget": {
+    "human_sleep": 6,
+    "human_work": 2,
+    "shared": 2,
+    "outside": 0,
+    "cat_feeding": 0,
+    "window": 0
+  },
+  "activity_schedule": [
+    {
+      "activity": "sleep",
+      "duration": 3
+    },
+    {
+      "activity": "home_work",
+      "duration": 2
+    },
+    {
+      "activity": "household",
+      "duration": 1
+    },
+    {
+      "activity": "leisure",
+      "duration": 2
+    },
+    {
+      "activity": "sleep",
+      "duration": 2
+    }
+  ],
+  "assumptions": {
+    "activity_to_zone_map": "ACTIVITY_TO_ZONE_MAP_v1",
+    "activity_to_zone_weights": {
+      "sleep": {
+        "human_sleep": 1.0
+      },
+      "home_work": {
+        "human_work": 0.85,
+        "shared": 0.15
+      },
+      "outside": {
+        "outside": 1.0
+      },
+      "household": {
+        "shared": 0.7,
+        "human_sleep": 0.15,
+        "cat_feeding": 0.15
+      },
+      "care": {
+        "shared": 0.5,
+        "human_sleep": 0.25,
+        "cat_feeding": 0.25
+      },
+      "leisure": {
+        "shared": 0.65,
+        "window": 0.2,
+        "human_sleep": 0.15
+      },
+      "education": {
+        "human_work": 0.75,
+        "shared": 0.25
+      }
+    },
+    "activity_order_template": "sleep -> household/care -> work/outside/education -> household/care -> leisure -> sleep/rest",
+    "tick_minutes": 1.0,
+    "normalization_applied": true,
+    "normalization_scale": 0.006944473379750193,
+    "model_assumptions": [
+      "Activity durations are derived from authoritative time-use data files.",
+      "Activity order is model-defined for this version.",
+      "Activity-to-zone mapping is model-defined because time-use surveys do not provide room-level residential location data.",
+      "Outside is modeled as a logical state; no door or commute path is modeled.",
+      "Pet care time is not directly modeled unless independent source data are provided."
+    ]
+  },
+  "profile_status": "data_supported",
+  "paper_ready": true
+}

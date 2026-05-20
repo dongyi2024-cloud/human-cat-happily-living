@@ -7,6 +7,5 @@ trajectory.csv
 *.csv
 !data/
 !data/*.csv
-result/
 outputs/
 docs/

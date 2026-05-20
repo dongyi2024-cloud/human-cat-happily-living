@@ -24,6 +24,7 @@ import csv
 import json
 from copy import deepcopy
 
+from project_paths import ensure_project_dir, project_relative_display, resolve_project_path
 from time_use_parameter_builder import TimeUseParameterBuilder
 
 # ===================== 中文字体支持 =====================
@@ -1197,7 +1198,7 @@ class Simulation:
             np.random.seed(random_seed)
         self.total_ticks = total_ticks
         self.random_seed = random_seed
-        self.output_dir = output_dir
+        self.output_dir = str(resolve_project_path(output_dir))
         self.auto_export = auto_export
         self.tick_minutes = tick_minutes
         self.human_profile_id = human_profile_id
@@ -1214,7 +1215,9 @@ class Simulation:
             country=country,
             day_type=day_type,
         )
+        floor_plan_path = str(resolve_project_path(floor_plan_path))
         parser = FloorPlanParser(floor_plan_path)
+        self.parser = parser
         self.img, self.zone_map, self.passable_maps, self.zone_stats, self.scale_x, self.scale_y = parser.parse()
 
         cp = np.where(self.passable_maps["cat"])
@@ -1450,23 +1453,22 @@ if __name__ == "__main__":
     print(" Standalone Edition - Zero Dependencies")
     print("="*60)
 
-    result_dir = "result"
-    os.makedirs(result_dir, exist_ok=True)
+    result_dir = ensure_project_dir("result")
 
     # 步骤1：自动生成标准户型图（与你的原始户型完全一致）
-    floor_plan = generate_floor_plan(os.path.join(result_dir, "floor_plan.png"))
+    floor_plan = generate_floor_plan(str(result_dir / "floor_plan.png"))
 
     # ★ 如果你想替换成自己的户型图，注释掉上面一行，改为：
     # floor_plan = "你的户型图.png"
 
     # 步骤2：创建模拟（默认1000步，可改为5000步获得更精确结果）
-    sim = Simulation(floor_plan, total_ticks=1440, output_dir=result_dir)
+    sim = Simulation(floor_plan, total_ticks=1440, output_dir=str(result_dir))
 
     # 步骤3：运行模拟
     sim.run()
 
     # 步骤4：输出结果（四宫格图：轨迹 + 猫热力图 + 人热力图 + 报告）
-    sim.visualize(save_path=os.path.join(result_dir, "simulation_result.png"))
+    sim.visualize(save_path=str(result_dir / "simulation_result.png"))
     sim.export_outputs()
 
     # 计算节点画像，供策略卡后处理使用。
@@ -1484,17 +1486,17 @@ if __name__ == "__main__":
         source_height_px=sim.parser.img_height,
     )
     analyzer.load_from_records(sim.tick_records)
-    analyzer.export_csv(os.path.join(result_dir, "trajectory.csv"))
+    analyzer.export_csv(str(result_dir / "trajectory.csv"))
     metrics = SpaceMetricsCalculator(analyzer).compute_all()
     detector = NodeDetector(metrics, intensity_pct=80, cooc_pct=90, dbscan_eps=2, dbscan_min_samples=3)
     nodes = detector.detect()
     strategy_nodes = build_strategy_card_nodes(nodes, analyzer, sim)
     draw_strategy_cards(
         strategy_nodes,
-        output_dir=os.path.join(result_dir, "strategy_cards"),
+        output_dir=result_dir / "strategy_cards",
         sim_steps=sim.total_ticks,
     )
 
     print("\n" + "="*60)
-    print(" ✅ 全部完成！请查看 result/ 下的 simulation_result.png、strategy_cards/ 和数据文件")
+    print(f" ✅ 全部完成！请查看 {project_relative_display(result_dir)} 下的 simulation_result.png、strategy_cards/ 和数据文件")
     print("="*60)

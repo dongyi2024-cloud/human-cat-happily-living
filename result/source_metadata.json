@@ -1,0 +1,70 @@
+{
+  "dataset": "China_Time_Use_2018",
+  "tables": [
+    "2018 China Time Use Survey Bulletin"
+  ],
+  "raw_files": [
+    "china_time_use_2018.csv"
+  ],
+  "occupation_categories": [
+    "overall_residents"
+  ],
+  "profile_status": "data_supported",
+  "paper_ready": true,
+  "raw_values": {
+    "dataset": "China_Time_Use_2018",
+    "activity_hours": {
+      "sleep": 11.8833,
+      "home_work": 4.4,
+      "outside": 0.6333,
+      "household": 2.7,
+      "care": 0.0,
+      "leisure": 3.9333,
+      "education": 0.45
+    },
+    "raw_fields": {
+      "personal_care_hours": 11.8833,
+      "paid_work_hours": 4.4,
+      "unpaid_work_hours": 2.7,
+      "discretionary_hours": 3.9333,
+      "education_hours": 0.45,
+      "travel_hours": 0.6333
+    },
+    "formulas": {
+      "sleep_minutes": "personal_care_hours * 60; source category also includes hygiene and eating",
+      "home_work_minutes": "paid_work_hours * 60",
+      "outside_minutes": "travel_hours * 60",
+      "household_minutes": "unpaid_work_hours * 60",
+      "leisure_minutes": "discretionary_hours * 60",
+      "education_minutes": "education_hours * 60"
+    },
+    "source_urls": [
+      "https://www.stats.gov.cn/sj/zxfb/202302/t20230203_1900224.html"
+    ]
+  },
+  "derived_formulas": {
+    "sleep_minutes": "personal_care_hours * 60; source category also includes hygiene and eating",
+    "home_work_minutes": "paid_work_hours * 60",
+    "outside_minutes": "travel_hours * 60",
+    "household_minutes": "unpaid_work_hours * 60",
+    "leisure_minutes": "discretionary_hours * 60",
+    "education_minutes": "education_hours * 60"
+  },
+  "normalization": {
+    "normalization_applied": true,
+    "scale": 0.006944473379750193,
+    "raw_total_minutes": 1439.9940000000001,
+    "target_minutes": 10.0
+  },
+  "model_assumptions": [
+    "Activity durations are derived from authoritative time-use data files.",
+    "Activity order is model-defined for this version.",
+    "Activity-to-zone mapping is model-defined because time-use surveys do not provide room-level residential location data.",
+    "Outside is modeled as a logical state; no door or commute path is modeled.",
+    "Pet care time is not directly modeled unless independent source data are provided."
+  ],
+  "activity_to_zone_map_version": "ACTIVITY_TO_ZONE_MAP_v1",
+  "source_urls": [
+    "https://www.stats.gov.cn/sj/zxfb/202302/t20230203_1900224.html"
+  ]
+}

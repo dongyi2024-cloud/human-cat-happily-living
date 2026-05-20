@@ -21,7 +21,8 @@
 - `trajectory_analyzer.py`：轨迹 CSV 导入导出、格栅化、行为频次字典、tick 级共现计数。
 - `metrics_calculator.py`：空间功能强度、行为熵、全状态/活跃共现密度、主导行为等指标。
 - `node_detector.py`：百分位阈值过滤、DBSCAN 聚类、节点分类。
-- `dashboard.py`：多通道可视化仪表盘输出。
+- `visualization_stage_v14.py`、`grid_diagnostic_stage_v14.py`、`node_diagnostic_stage_v14.py`、`final_dashboard_stage_v14.py`：v14 分阶段可视化输出。
+- `strategy_cards_module.py`：健康策略卡 / 安全策略卡输出。
 - `docs/progress.md`：当前实现进度和模块说明。
 - `openspec/`、`.codex/skills/openspec-*`：OpenSpec 变更工作流。
 
@@ -55,10 +56,10 @@
 
 ## 开发与验证
 
-测试和验证运行产生的图片、CSV、JSON 等结果文件统一写入仓库根目录下的 `result/`：
+测试和验证运行产生的图片、CSV、JSON 等结果文件统一写入仓库根目录下的 `output/`：
 
 ```text
-/home/administrator/human-cat-happily-living/result/
+/home/administrator/human-cat-happily-living/output/
 ```
 
 除非用户明确要求覆盖根目录历史产物，避免把临时测试结果散落在项目根目录。
@@ -69,12 +70,12 @@
 python trajectory_analyzer.py
 python metrics_calculator.py
 python node_detector.py
-python dashboard.py
+python simulation_v9.py
 ```
 
 注意：
 
-- 这些脚本可能依赖运行后生成的 `result/floor_plan.png`、`result/trajectory.csv` 或其他输出文件。
+- 这些脚本可能依赖运行后生成的 `output/floor_plan.png`、`output/trajectory.csv` 或其他输出文件。
 - 若测试入口生成图片或 CSV，确认输出语义正确，不要把临时产物误当作源码改动提交。
 - 如果修改了共现、冲突、聚类或指标逻辑，应至少验证 `trajectory_analyzer.py` 和相关下游模块。
 
